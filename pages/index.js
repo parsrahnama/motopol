@@ -1,3 +1,10 @@
+import { isSupabaseConfigured } from '../lib/supabase';
+
+// داخل کامپوننت، قبل از fetch کردن منو:
+if (!isSupabaseConfigured) {
+  return <div style={{padding: 40}}>⚠️ اتصال به دیتابیس تنظیم نشده است — متغیرهای محیطی را چک کنید.</div>;
+}
+
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 
