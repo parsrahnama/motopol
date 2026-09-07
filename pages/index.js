@@ -1,239 +1,274 @@
-import { isSupabaseConfigured } from '../lib/supabase';
-
-// داخل کامپوننت، قبل از fetch کردن منو:
-if (!isSupabaseConfigured) {
-  return <div style={{padding: 40}}>⚠️ اتصال به دیتابیس تنظیم نشده است — متغیرهای محیطی را چک کنید.</div>;
-}
-
-
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+import Head from 'next/head';
 import { supabase } from '../lib/supabase';
 
-export default function MotopolApp() {
-  const [activeTab, setActiveTab] = useState('menu');
+export default function Home() {
   const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [activeCategory, setActiveCategory] = useState('همه');
   const [cart, setCart] = useState([]);
-  const [customerPhone, setCustomerPhone] = useState('');
+  const [loading, setLoading] = useState(true);
   const [customerName, setCustomerName] = useState('');
-  const [address, setAddress] = useState('');
-  const [isVip, setIsVip] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [orders, setOrders] = useState([]);
+  const [tableNumber, setTableNumber] = useState('');
+  const [orderStatus, setOrderStatus] = useState(null);
 
   useEffect(() => {
     fetchProducts();
   }, []);
 
-  const fetchProducts = async () => {
-    const { data, error } = await supabase.from('products').select('*').eq('is_active', true);
-    if (!error && data) setProducts(data);
-  };
-
-  const fetchOrders = async () => {
-    const { data, error } = await supabase
-      .from('orders')
-      .select('*, order_items(*)')
-      .order('created_at', { ascending: false });
-    if (!error && data) setOrders(data);
-  };
-
-  useEffect(() => {
-    if (activeTab === 'admin') fetchOrders();
-  }, [activeTab]);
-
-  const addToCart = (product) => {
-    const existing = cart.find((item) => item.id === product.id);
-    if (existing) {
-      setCart(cart.map((item) => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item));
-    } else {
-      setCart([...cart, { ...product, quantity: 1 }]);
-    }
-  };
-
-  const removeFromCart = (productId) => {
-    const existing = cart.find((item) => item.id === productId);
-    if (existing.quantity === 1) {
-      setCart(cart.filter((item) => item.id !== productId));
-    } else {
-      setCart(cart.map((item) => item.id === productId ? { ...item, quantity: item.quantity - 1 } : item));
-    }
-  };
-
-  const calculateTotal = () => {
-    return cart.reduce((total, item) => {
-      const price = isVip && item.vip_price ? item.vip_price : item.base_price;
-      return total + price * item.quantity;
-    }, 0);
-  };
-
-  const handlePlaceOrder = async (e) => {
-    e.preventDefault();
-    if (!customerPhone || cart.length === 0) return alert('لطفاً شماره تماس و حداقل یک محصول را انتخاب کنید.');
-
+  async function fetchProducts() {
     setLoading(true);
-
     try {
-      let { data: customer } = await supabase.from('customers').select('*').eq('phone', customerPhone).single();
-      
-      if (!customer) {
-        const { data: newCustomer } = await supabase
-          .from('customers')
-          .insert([{ phone: customerPhone, name: customerName, default_address: address }])
-          .select()
-          .single();
-        customer = newCustomer;
+      const { data, error } = await supabase
+        .from('products')
+        .select('*')
+        .eq('is_active', true);
+
+      if (error) throw error;
+
+      if (data) {
+        setProducts(data);
+        const uniqueCategories = ['همه', ...new Set(data.map((item) => item.category).filter(Boolean))];
+        setCategories(uniqueCategories);
       }
-
-      const totalAmount = calculateTotal();
-      const { data: order, error: orderErr } = await supabase
-        .from('orders')
-        .insert([{
-          customer_id: customer.id,
-          subtotal: totalAmount,
-          final_amount: totalAmount,
-          delivery_address: address,
-          status: 'new'
-        }])
-        .select()
-        .single();
-
-      if (orderErr) throw orderErr;
-
-      const orderItems = cart.map((item) => ({
-        order_id: order.id,
-        product_id: item.id,
-        product_name: item.name,
-        quantity: item.quantity,
-        unit_price: isVip && item.vip_price ? item.vip_price : item.base_price,
-        total_price: (isVip && item.vip_price ? item.vip_price : item.base_price) * item.quantity
-      }));
-
-      await supabase.from('order_items').insert(orderItems);
-
-      alert('سفارش شما با موفقیت ثبت شد! ☕');
-      setCart([]);
     } catch (err) {
-      alert('خطا در ثبت سفارش: ' + err.message);
+      console.error('Error fetching products:', err.message);
     } finally {
       setLoading(false);
     }
+  }
+
+  const addToCart = (product) => {
+    setCart((prevCart) => {
+      const existing = prevCart.find((item) => item.id === product.id);
+      if (existing) {
+        return prevCart.map((item) =>
+          item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+        );
+      }
+      return [...prevCart, { ...product, quantity: 1 }];
+    });
   };
 
-  const updateOrderStatus = async (orderId, newStatus) => {
-    await supabase.from('orders').update({ status: newStatus }).eq('id', orderId);
-    fetchOrders();
+  const removeFromCart = (productId) => {
+    setCart((prevCart) => {
+      const existing = prevCart.find((item) => item.id === productId);
+      if (existing && existing.quantity > 1) {
+        return prevCart.map((item) =>
+          item.id === productId ? { ...item, quantity: item.quantity - 1 } : item
+        );
+      }
+      return prevCart.filter((item) => item.id !== productId);
+    });
+  };
+
+  const totalPrice = cart.reduce((sum, item) => sum + (Number(item.base_price) || 0) * item.quantity, 0);
+
+  const filteredProducts = activeCategory === 'همه'
+    ? products
+    : products.filter((p) => p.category === activeCategory);
+
+  const handleSubmitOrder = async (e) => {
+    e.preventDefault();
+    if (!customerName || !tableNumber || cart.length === 0) {
+      alert('لطفاً نام، شماره میز و حداقل یک محصول را انتخاب کنید.');
+      return;
+    }
+
+    try {
+      const { error } = await supabase.from('orders').insert([
+        {
+          customer_name: customerName,
+          table_number: tableNumber,
+          total_price: totalPrice,
+          status: 'pending',
+          items: cart
+        }
+      ]);
+
+      if (error) throw error;
+
+      setOrderStatus('ثبت موفق');
+      setCart([]);
+      setCustomerName('');
+      setTableNumber('');
+      setTimeout(() => setOrderStatus(null), 4000);
+    } catch (err) {
+      console.error('Error creating order:', err.message);
+      alert('ثبت سفارش با خطا مواجه شد. لطفاً به باریستا اطلاع دهید.');
+    }
   };
 
   return (
-    <div style={{ fontFamily: 'Tahoma, sans-serif', maxWidth: '480px', margin: '0 auto', background: '#f9f9f9', minHeight: '100vh', paddingBottom: '80px' }}>
-      <header style={{ background: '#111', color: '#fff', padding: '16px', textAlign: 'center' }}>
-        <h1 style={{ margin: 0, fontSize: '22px', letterSpacing: '2px' }}>MOTOPOL</h1>
-        <p style={{ margin: '4px 0 0', fontSize: '12px', opacity: 0.8 }}>سیستم سفارش‌گیری سریع کافه موتوپل</p>
+    <div style={{ direction: 'rtl', fontFamily: 'system-ui, -apple-system, sans-serif', backgroundColor: '#0f172a', minHeight: '100vh', color: '#f8fafc' }}>
+      <Head>
+        <title>کافه موتوپل | سفارش آنلاین منو</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      </Head>
+
+      {/* Header */}
+      <header style={{ padding: '20px', borderBottom: '1px solid #334155', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1e293b' }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#38bdf8' }}>کافه موتوپل ☕</h1>
+          <p style={{ margin: '4px 0 0', fontSize: '0.85rem', color: '#94a3b8' }}>سفارش مستقیم و هوشمند از سر میز</p>
+        </div>
+        <div style={{ backgroundColor: '#0f172a', padding: '6px 14px', borderRadius: '20px', fontSize: '0.9rem', border: '1px solid #334155' }}>
+          سبد: <strong style={{ color: '#38bdf8' }}>{cart.reduce((a, b) => a + b.quantity, 0)}</strong>
+        </div>
       </header>
 
-      <div style={{ display: 'flex', borderBottom: '1px solid #ddd', background: '#fff' }}>
-        <button 
-          onClick={() => setActiveTab('menu')}
-          style={{ flex: 1, padding: '12px', border: 'none', background: activeTab === 'menu' ? '#eee' : '#fff', fontWeight: 'bold' }}
-        >
-          منوی سفارش
-        </button>
-        <button 
-          onClick={() => setActiveTab('admin')}
-          style={{ flex: 1, padding: '12px', border: 'none', background: activeTab === 'admin' ? '#eee' : '#fff', fontWeight: 'bold' }}
-        >
-          پنل مدیریت کافه
-        </button>
-      </div>
+      <main style={{ maxWidth: '900px', margin: '0 auto', padding: '20px' }}>
+        {/* Categories Bar */}
+        <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '12px', marginBottom: '20px' }}>
+          {categories.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setActiveCategory(cat)}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '25px',
+                border: 'none',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                fontWeight: 'bold',
+                backgroundColor: activeCategory === cat ? '#38bdf8' : '#1e293b',
+                color: activeCategory === cat ? '#0f172a' : '#cbd5e1'
+              }}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
 
-      {activeTab === 'menu' && (
-        <main style={{ padding: '16px' }}>
-          <h3>منوی محصولات</h3>
-          {products.map((p) => (
-            <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', padding: '12px', marginBottom: '8px', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-              <div>
-                <strong style={{ display: 'block' }}>{p.name}</strong>
-                <span style={{ fontSize: '12px', color: '#666' }}>{p.category}</span>
-                <div style={{ marginTop: '4px', fontSize: '14px' }}>
-                  {isVip && p.vip_price ? (
-                    <span><s style={{ color: '#888', marginLeft: '6px' }}>{p.base_price.toLocaleString()}</s> <strong style={{ color: 'green' }}>{p.vip_price.toLocaleString()} تومان</strong></span>
-                  ) : (
-                    <span>{p.base_price.toLocaleString()} تومان</span>
+        {/* Products Grid */}
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '50px', color: '#94a3b8' }}>در حال بارگذاری منو...</div>
+        ) : filteredProducts.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '50px', color: '#94a3b8' }}>محصولی در این دسته‌بندی یافت نشد.</div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '16px' }}>
+            {filteredProducts.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  backgroundColor: '#1e293b',
+                  borderRadius: '12px',
+                  padding: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between',
+                  border: '1px solid #334155'
+                }}
+              >
+                <div>
+                  <h3 style={{ margin: '0 0 8px 0', fontSize: '1.1rem', color: '#f1f5f9' }}>{item.name}</h3>
+                  {item.description && (
+                    <p style={{ margin: '0 0 12px 0', fontSize: '0.85rem', color: '#94a3b8', lineHeight: '1.4' }}>
+                      {item.description}
+                    </p>
                   )}
                 </div>
-              </div>
-              <button onClick={() => addToCart(p)} style={{ background: '#111', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>
-                + افزودن
-              </button>
-            </div>
-          ))}
-
-          {cart.length > 0 && (
-            <section style={{ marginTop: '24px', background: '#fff', padding: '16px', borderRadius: '8px', border: '1px solid #e0e0e0' }}>
-              <h4>سبد خرید شما</h4>
-              {cart.map((item) => (
-                <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <span>{item.name} (x{item.quantity})</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
                   <div>
-                    <button onClick={() => removeFromCart(item.id)} style={{ margin: '0 4px' }}>-</button>
-                    <button onClick={() => addToCart(item)} style={{ margin: '0 4px' }}>+</button>
+                    <span style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#38bdf8' }}>
+                      {Number(item.base_price).toLocaleString('fa-IR')}
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: '#94a3b8', marginRight: '4px' }}>تومان</span>
+                  </div>
+                  <button
+                    onClick={() => addToCart(item)}
+                    style={{
+                      backgroundColor: '#38bdf8',
+                      color: '#0f172a',
+                      border: 'none',
+                      borderRadius: '8px',
+                      padding: '8px 14px',
+                      cursor: 'pointer',
+                      fontWeight: 'bold'
+                    }}
+                  >
+                    + افزودن
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Order / Cart Section */}
+        {cart.length > 0 && (
+          <div style={{ marginTop: '40px', backgroundColor: '#1e293b', padding: '20px', borderRadius: '16px', border: '1px solid #38bdf8' }}>
+            <h2 style={{ margin: '0 0 16px 0', fontSize: '1.2rem', color: '#38bdf8' }}>🛒 سبد سفارش شما</h2>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
+              {cart.map((cartItem) => (
+                <div key={cartItem.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #334155', paddingBottom: '8px' }}>
+                  <span>{cartItem.name} ({cartItem.quantity} عدد)</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span>{(Number(cartItem.base_price) * cartItem.quantity).toLocaleString('fa-IR')} ت</span>
+                    <button
+                      onClick={() => removeFromCart(cartItem.id)}
+                      style={{ backgroundColor: '#ef4444', color: '#fff', border: 'none', borderRadius: '4px', width: '26px', height: '26px', cursor: 'pointer' }}
+                    >
+                      -
+                    </button>
+                    <button
+                      onClick={() => addToCart(cartItem)}
+                      style={{ backgroundColor: '#22c55e', color: '#fff', border: 'none', borderRadius: '4px', width: '26px', height: '26px', cursor: 'pointer' }}
+                    >
+                      +
+                    </button>
                   </div>
                 </div>
               ))}
-              <hr />
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', margin: '12px 0' }}>
-                <span>مبلغ قابل پرداخت:</span>
-                <span>{calculateTotal().toLocaleString()} تومان</span>
-              </div>
-
-              <form onSubmit={handlePlaceOrder}>
-                <input 
-                  type="text" 
-                  placeholder="شماره موبایل (مخصوص ثبت سفارش)" 
-                  value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value)}
-                  required
-                  style={{ width: '100%', padding: '10px', marginBottom: '8px', borderRadius: '4px', border: '1px solid #ccc', boxSizing: 'border-box' }}
-                />
-                <input 
-                  type="text" 
-                  placeholder="نام شما (اختیاری)" 
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  style={{ width: '100%', padding: '10px', marginBottom: '8px', borderRadius: '4px', border: '1px solid #ccc', boxSizing: 'border-box' }}
-                />
-                <input 
-                  type="text" 
-                  placeholder="آدرس تحویل / شماره میز" 
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  style={{ width: '100%', padding: '10px', marginBottom: '12px', borderRadius: '4px', border: '1px solid #ccc', boxSizing: 'border-box' }}
-                />
-                <button type="submit" disabled={loading} style={{ width: '100%', background: 'green', color: '#fff', border: 'none', padding: '12px', borderRadius: '6px', fontSize: '16px', fontWeight: 'bold' }}>
-                  {loading ? 'در حال ثبت...' : 'تأیید و ثبت نهایی سفارش'}
-                </button>
-              </form>
-            </section>
-          )}
-        </main>
-      )}
-
-      {activeTab === 'admin' && (
-        <main style={{ padding: '16px' }}>
-          <h3>لیست سفارش‌های جدید موتوپل</h3>
-          {orders.length === 0 ? <p>هیچ سفارشی ثبت نشده است.</p> : orders.map((order) => (
-            <div key={order.id} style={{ background: '#fff', padding: '12px', marginBottom: '12px', borderRadius: '8px', borderLeft: '4px solid #111' }}>
-              <div><strong>شناسه سفارش:</strong> {order.id.slice(0, 8)}...</div>
-              <div><strong>مبلغ:</strong> {order.final_amount.toLocaleString()} تومان</div>
-              <div><strong>وضعیت:</strong> <span style={{ fontWeight: 'bold', color: 'blue' }}>{order.status}</span></div>
-              <div style={{ marginTop: '8px' }}>
-                <button onClick={() => updateOrderStatus(order.id, 'preparing')} style={{ marginLeft: '4px' }}>در حال آماده‌سازی</button>
-                <button onClick={() => updateOrderStatus(order.id, 'delivered')} style={{ marginLeft: '4px' }}>تحویل داده شد</button>
-              </div>
             </div>
-          ))}
-        </main>
-      )}
+
+            <div style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '20px', textAlign: 'left' }}>
+              جمع کل: {totalPrice.toLocaleString('fa-IR')} تومان
+            </div>
+
+            <form onSubmit={handleSubmitOrder} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <input
+                type="text"
+                placeholder="نام شما"
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                required
+                style={{ padding: '12px', borderRadius: '8px', border: '1px solid #475569', backgroundColor: '#0f172a', color: '#fff' }}
+              />
+              <input
+                type="text"
+                placeholder="شماره میز (مثال: ۵)"
+                value={tableNumber}
+                onChange={(e) => setTableNumber(e.target.value)}
+                required
+                style={{ padding: '12px', borderRadius: '8px', border: '1px solid #475569', backgroundColor: '#0f172a', color: '#fff' }}
+              />
+              <button
+                type="submit"
+                style={{
+                  backgroundColor: '#22c55e',
+                  color: '#fff',
+                  padding: '14px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  fontSize: '1rem',
+                  fontWeight: 'bold',
+                  cursor: 'pointer'
+                }}
+              >
+                ثبت و ارسال سفارش به صندوق 🚀
+              </button>
+            </form>
+          </div>
+        )}
+
+        {orderStatus && (
+          <div style={{ marginTop: '20px', padding: '16px', backgroundColor: '#15803d', borderRadius: '8px', textAlign: 'center', fontWeight: 'bold' }}>
+            🎉 سفارش شما با موفقیت ثبت شد و در حال آماده‌سازی است!
+          </div>
+        )}
+      </main>
     </div>
   );
 }
