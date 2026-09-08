@@ -1,12 +1,22 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Head from 'next/head';
 import { supabase } from '../lib/supabase';
+import { useRouter } from 'next/router'; // import router
+
+// Constants for tracking steps
+const STEPS = [
+  { key: 'pending', label: 'ثبت سفارش', icon: '📝' },
+  { key: 'processing', label: 'آماده‌سازی', icon: '☕' },
+  { key: 'out_for_delivery', label: 'پیک در مسیر', icon: '🛵' },
+  { key: 'delivered', label: 'تحویل شد', icon: '✅' }
+];
 
 export default function MotopolApp() {
+  const router = useRouter(); // Initialize router
   const [customer, setCustomer] = useState(null);
   const [phoneInput, setPhoneInput] = useState('');
   const [authStep, setAuthStep] = useState('checking'); // 'checking', 'login', 'register', 'app'
-  
+
   // Registration State
   const [regData, setRegData] = useState({
     fullName: '',
@@ -22,26 +32,32 @@ export default function MotopolApp() {
   const [activeCategory, setActiveCategory] = useState('همه');
   const [cart, setCart] = useState([]);
   const [loadingMenu, setLoadingMenu] = useState(true);
-  const [orderSuccess, setOrderSuccess] = useState(null);
-  const [activeTab, setActiveTab] = useState('menu'); // 'menu', 'cart', 'profile'
+  const [orderSuccess, setOrderSuccess] = useState(null); // For showing success message in menu tab
+  const [lastOrder, setLastOrder] = useState(null); // To store the last active order for tracking
+  const [activeTab, setActiveTab] = useState('menu'); // 'menu', 'cart', 'profile', 'track'
   const [submitting, setSubmitting] = useState(false);
+  const orderChannel = useRef(null); // Ref to hold the Supabase channel
 
   useEffect(() => {
-    // 1. بررسی سشن محلی کاربر
-    const savedCustomer = localStorage.getItem('motopol_customer');
-    if (savedCustomer) {
-      try {
-        const parsed = JSON.parse(savedCustomer);
-        refreshCustomerData(parsed.phone);
-      } catch (e) {
+    const initializeApp = async () => {
+      // 1. Check local storage for customer session
+      const savedCustomer = localStorage.getItem('motopol_customer');
+      if (savedCustomer) {
+        try {
+          const parsed = JSON.parse(savedCustomer);
+          await refreshCustomerData(parsed.phone);
+        } catch (e) {
+          setAuthStep('login');
+        }
+      } else {
         setAuthStep('login');
       }
-    } else {
-      setAuthStep('login');
-    }
-    fetchProducts();
+      await fetchProducts();
+    };
+    initializeApp();
   }, []);
 
+  // Function to fetch customer data and set state
   async function refreshCustomerData(phone) {
     try {
       const { data, error } = await supabase
@@ -54,14 +70,42 @@ export default function MotopolApp() {
         setCustomer(data);
         localStorage.setItem('motopol_customer', JSON.stringify(data));
         setAuthStep('app');
+
+        // Fetch last active order for the tracking tab
+        await fetchLastOrder(phone);
       } else {
         setAuthStep('login');
       }
     } catch (e) {
+      console.error("Error fetching customer data:", e);
       setAuthStep('login');
     }
   }
 
+  // Function to fetch the last active order
+  async function fetchLastOrder(phone) {
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('phone', phone)
+        .in('status', ['pending', 'processing', 'out_for_delivery'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!error && data) {
+        setLastOrder(data);
+        setActiveTab('track'); // Automatically go to track tab if there's an active order
+      } else {
+        setLastOrder(null);
+      }
+    } catch (err) {
+      console.error("Error fetching last order:", err);
+    }
+  }
+
+  // Fetch products and categories
   async function fetchProducts() {
     setLoadingMenu(true);
     try {
@@ -83,7 +127,7 @@ export default function MotopolApp() {
     }
   }
 
-  // احراز هویت با شماره موبایل
+  // Handle login with phone number
   const handleLoginSubmit = async (e) => {
     e.preventDefault();
     if (!phoneInput || phoneInput.length < 10) {
@@ -91,24 +135,31 @@ export default function MotopolApp() {
       return;
     }
     setSubmitting(true);
-    const { data, error } = await supabase
-      .from('customers')
-      .select('*')
-      .eq('phone', phoneInput.trim())
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('phone', phoneInput.trim())
+        .single();
 
-    setSubmitting(false);
-    if (data && !error) {
-      setCustomer(data);
-      localStorage.setItem('motopol_customer', JSON.stringify(data));
-      setAuthStep('app');
-    } else {
-      setRegData(prev => ({ ...prev, phone: phoneInput.trim() }));
-      setAuthStep('register');
+      if (data && !error) {
+        setCustomer(data);
+        localStorage.setItem('motopol_customer', JSON.stringify(data));
+        setAuthStep('app');
+        await fetchLastOrder(phoneInput.trim()); // Fetch last order after login
+      } else {
+        setRegData(prev => ({ ...prev, phone: phoneInput.trim() }));
+        setAuthStep('register');
+      }
+    } catch (err) {
+      console.error("Login error:", err);
+      alert('خطا در ورود: ' + err.message);
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  // ثبت‌نام مشتری جدید (کسبه یا عادی)
+  // Handle new customer registration
   const handleRegisterSubmit = async (e) => {
     e.preventDefault();
     setSubmitting(true);
@@ -120,7 +171,9 @@ export default function MotopolApp() {
           shop_name: regData.shopName,
           shop_address: regData.shopAddress,
           address_notes: regData.addressNotes,
-          is_vip: false
+          is_vip: false,
+          order_count: 0,
+          total_spent: 0
         }
       ]).select().single();
 
@@ -129,13 +182,16 @@ export default function MotopolApp() {
       setCustomer(data);
       localStorage.setItem('motopol_customer', JSON.stringify(data));
       setAuthStep('app');
+      // No need to fetchLastOrder here as it's a new customer
     } catch (err) {
+      console.error("Registration error:", err);
       alert('خطا در ثبت‌نام: ' + err.message);
     } finally {
       setSubmitting(false);
     }
   };
 
+  // Get product price based on customer VIP status
   const getProductPrice = (item) => {
     if (customer?.is_vip && item.vip_price) {
       return Number(item.vip_price);
@@ -143,22 +199,25 @@ export default function MotopolApp() {
     return Number(item.base_price) || 0;
   };
 
+  // Add item to cart
   const addToCart = (product) => {
     setCart((prev) => {
       const exist = prev.find((i) => i.id === product.id);
       const price = getProductPrice(product);
       if (exist) {
-        return prev.map((i) => (i.id === product.id ? { ...i, quantity: i.quantity + 1 } : i));
+        return prev.map((i) => (i.id === product.id ? { ...i, quantity: i.quantity + 1, final_price: price } : i));
       }
       return [...prev, { ...product, final_price: price, quantity: 1 }];
     });
   };
 
+  // Remove item from cart
   const removeFromCart = (productId) => {
     setCart((prev) => {
       const exist = prev.find((i) => i.id === productId);
       if (exist && exist.quantity > 1) {
-        return prev.map((i) => (i.id === productId ? { ...i, quantity: i.quantity - 1 } : i));
+        const price = getProductPrice(exist);
+        return prev.map((i) => (i.id === productId ? { ...i, quantity: i.quantity - 1, final_price: price } : i));
       }
       return prev.filter((i) => i.id !== productId);
     });
@@ -166,14 +225,14 @@ export default function MotopolApp() {
 
   const totalItemsCount = cart.reduce((s, i) => s + i.quantity, 0);
   const totalPrice = cart.reduce((sum, item) => sum + (item.final_price || getProductPrice(item)) * item.quantity, 0);
-  const isFreeDelivery = totalItemsCount >= 2;
+  const isFreeDelivery = totalItemsCount >= 2; // Free delivery for 2 or more items
 
-  // ثبت نهایی سفارش
+  // Handle final order submission and redirect to track tab
   const handleFinalOrder = async () => {
     if (cart.length === 0) return;
     setSubmitting(true);
     try {
-      const { error } = await supabase.from('orders').insert([
+      const { data, error } = await supabase.from('orders').insert([
         {
           customer_id: customer.id,
           customer_name: customer.full_name,
@@ -185,29 +244,79 @@ export default function MotopolApp() {
           delivery_fee: isFreeDelivery ? 0 : 15000,
           status: 'pending'
         }
-      ]);
+      ]).select().single(); // Select to get the inserted order data, including ID
 
       if (error) throw error;
 
-      // آپدیت سریع آمار کاربر
+      // Update customer's order count and total spent
       await supabase.from('customers').update({
         order_count: (customer.order_count || 0) + 1,
         total_spent: Number(customer.total_spent || 0) + totalPrice
       }).eq('id', customer.id);
 
-      setOrderSuccess(true);
-      setCart([]);
-      setActiveTab('menu');
+      setLastOrder(data);        // Set the newly created order
+      setOrderSuccess(false);    // Reset order success message
+      setActiveTab('track');     // Switch to the track tab
+      setCart([]);               // Clear the cart
     } catch (err) {
+      console.error("Order submission error:", err);
       alert('خطا در ثبت سفارش: ' + err.message);
     } finally {
       setSubmitting(false);
     }
   };
 
+  // Effect to subscribe to real-time updates for the last order
+  useEffect(() => {
+    // Unsubscribe from previous channel if it exists
+    if (orderChannel.current) {
+      supabase.removeChannel(orderChannel.current);
+    }
+
+    if (lastOrder?.id) {
+      // Subscribe to changes for the specific last order
+      orderChannel.current = supabase
+        .channel(`order_track_${lastOrder.id}`)
+        .on('postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'orders',
+            filter: `id=eq.${lastOrder.id}`
+          },
+          (payload) => {
+            setLastOrder(payload.new); // Update lastOrder state with new data
+            // Optionally play ding sound for status updates
+            // if (payload.new.status !== payload.old.status) {
+            //   playDingSound();
+            // }
+          }
+        )
+        .subscribe();
+    }
+
+    // Cleanup function to unsubscribe when component unmounts or lastOrder changes
+    return () => {
+      if (orderChannel.current) {
+        supabase.removeChannel(orderChannel.current);
+      }
+    };
+  }, [lastOrder?.id]); // Re-run effect when lastOrder ID changes
+
+  // Filter products based on active category
   const filteredProducts = activeCategory === 'همه'
     ? products
     : products.filter((p) => p.category === activeCategory);
+
+  // Logout function
+  const handleLogout = () => {
+    localStorage.removeItem('motopol_customer');
+    setCustomer(null);
+    setAuthStep('login');
+    setLastOrder(null); // Clear last order on logout
+    setCart([]);
+    setActiveTab('menu');
+  };
 
   return (
     <div className="motopol-container">
@@ -231,7 +340,7 @@ export default function MotopolApp() {
           margin: 0 auto;
           background-color: #0f172a;
           position: relative;
-          padding-bottom: 80px;
+          padding-bottom: 80px; /* Space for the nav bar */
           box-shadow: 0 0 40px rgba(0,0,0,0.6);
         }
         .btn-gold {
@@ -249,9 +358,17 @@ export default function MotopolApp() {
           border: 1px solid #334155;
           border-radius: 16px;
         }
+        /* Hide scrollbar for mobile */
+        .hide-scrollbar {
+          scrollbar-width: none; /* Firefox */
+          -ms-overflow-style: none;  /* Internet Explorer 10+ */
+        }
+        .hide-scrollbar::-webkit-scrollbar {
+          display: none; /* Safari and Chrome */
+        }
       `}</style>
 
-      {/* STEP 1: فرم ورود سریع فقط با موبایل */}
+      {/* STEP 1: Quick Login Form (Phone Only) */}
       {authStep === 'login' && (
         <div style={{ padding: '40px 24px', textAlign: 'center' }}>
           <div style={{ fontSize: '3rem', marginBottom: '10px' }}>☕</div>
@@ -268,15 +385,9 @@ export default function MotopolApp() {
                 onChange={(e) => setPhoneInput(e.target.value)}
                 required
                 style={{
-                  width: '100%',
-                  padding: '16px',
-                  borderRadius: '12px',
-                  backgroundColor: '#1e293b',
-                  border: '1px solid #475569',
-                  color: '#fff',
-                  fontSize: '1.2rem',
-                  textAlign: 'center',
-                  letterSpacing: '2px'
+                  width: '100%', padding: '16px', borderRadius: '12px',
+                  backgroundColor: '#1e293b', border: '1px solid #475569', color: '#fff',
+                  fontSize: '1.2rem', textAlign: 'center', letterSpacing: '2px'
                 }}
               />
             </div>
@@ -287,44 +398,17 @@ export default function MotopolApp() {
         </div>
       )}
 
-      {/* STEP 2: ثبت‌نام یکباره کسبه و مشتریان */}
+      {/* STEP 2: One-time Registration */}
       {authStep === 'register' && (
         <div style={{ padding: '28px 20px' }}>
           <h2 style={{ color: '#f59e0b', fontSize: '1.4rem', marginBottom: '6px' }}>ثبت عضویت در موتوپل ✨</h2>
           <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '24px' }}>فقط همین یک‌بار اطلاعات مغازه را وارد کنید تا سفارش‌های بعدی ۳ کلیکه ثبت شوند.</p>
 
           <form onSubmit={handleRegisterSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <input
-              type="text"
-              placeholder="نام و نام خانوادگی"
-              value={regData.fullName}
-              onChange={(e) => setRegData({ ...regData, fullName: e.target.value })}
-              required
-              style={{ padding: '14px', borderRadius: '10px', backgroundColor: '#1e293b', border: '1px solid #334155', color: '#fff' }}
-            />
-            <input
-              type="text"
-              placeholder="نام مغازه / فروشگاه / واحد"
-              value={regData.shopName}
-              onChange={(e) => setRegData({ ...regData, shopName: e.target.value })}
-              required
-              style={{ padding: '14px', borderRadius: '10px', backgroundColor: '#1e293b', border: '1px solid #334155', color: '#fff' }}
-            />
-            <input
-              type="text"
-              placeholder="آدرس دقیق (مثلاً پاساژ ملت، طبقه ۱، پلاک ۲۳)"
-              value={regData.shopAddress}
-              onChange={(e) => setRegData({ ...regData, shopAddress: e.target.value })}
-              required
-              style={{ padding: '14px', borderRadius: '10px', backgroundColor: '#1e293b', border: '1px solid #334155', color: '#fff' }}
-            />
-            <input
-              type="text"
-              placeholder="توضیحات تکمیلی تحویل (اختیاری)"
-              value={regData.addressNotes}
-              onChange={(e) => setRegData({ ...regData, addressNotes: e.target.value })}
-              style={{ padding: '14px', borderRadius: '10px', backgroundColor: '#1e293b', border: '1px solid #334155', color: '#fff' }}
-            />
+            <input type="text" placeholder="نام و نام خانوادگی" value={regData.fullName} onChange={(e) => setRegData({ ...regData, fullName: e.target.value })} required style={{ padding: '14px', borderRadius: '10px', backgroundColor: '#1e293b', border: '1px solid #334155', color: '#fff' }} />
+            <input type="text" placeholder="نام مغازه / فروشگاه / واحد" value={regData.shopName} onChange={(e) => setRegData({ ...regData, shopName: e.target.value })} required style={{ padding: '14px', borderRadius: '10px', backgroundColor: '#1e293b', border: '1px solid #334155', color: '#fff' }} />
+            <input type="text" placeholder="آدرس دقیق (مثلاً پاساژ ملت، طبقه ۱، پلاک ۲۳)" value={regData.shopAddress} onChange={(e) => setRegData({ ...regData, shopAddress: e.target.value })} required style={{ padding: '14px', borderRadius: '10px', backgroundColor: '#1e293b', border: '1px solid #334155', color: '#fff' }} />
+            <input type="text" placeholder="توضیحات تکمیلی تحویل (اختیاری)" value={regData.addressNotes} onChange={(e) => setRegData({ ...regData, addressNotes: e.target.value })} style={{ padding: '14px', borderRadius: '10px', backgroundColor: '#1e293b', border: '1px solid #334155', color: '#fff' }} />
             <button type="submit" disabled={submitting} className="btn-gold" style={{ padding: '16px', fontSize: '1rem', marginTop: '10px' }}>
               {submitting ? 'در حال ثبت اطلاعات...' : 'ثبت و شروع سفارش ☕'}
             </button>
@@ -332,17 +416,15 @@ export default function MotopolApp() {
         </div>
       )}
 
-      {/* STEP 3: محیط اصلی وب‌اپلیکیشن (مشتری شناسایی شده) */}
+      {/* STEP 3: Main App Interface (Customer Authenticated) */}
       {authStep === 'app' && customer && (
         <>
-          {/* نوار وضعیت مشتری و هدر لوکس */}
+          {/* Header */}
           <header style={{ padding: '16px 20px', backgroundColor: '#161f30', borderBottom: '1px solid #22314d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{ fontSize: '1.1rem', fontWeight: 800, color: '#f8fafc' }}>سلام {customer.full_name.split(' ')[0]} 👋</span>
-                {customer.is_vip && (
-                  <span style={{ backgroundColor: '#f59e0b', color: '#000', fontSize: '0.7rem', padding: '2px 8px', borderRadius: '10px', fontWeight: 800 }}>VIP</span>
-                )}
+                {customer.is_vip && <span style={{ backgroundColor: '#f59e0b', color: '#000', fontSize: '0.7rem', padding: '2px 8px', borderRadius: '10px', fontWeight: 800 }}>VIP</span>}
               </div>
               <p style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '2px' }}>تحویل به: <strong style={{ color: '#cbd5e1' }}>{customer.shop_name}</strong></p>
             </div>
@@ -352,31 +434,25 @@ export default function MotopolApp() {
             </div>
           </header>
 
-          {orderSuccess && (
+          {orderSuccess && ( // This message appears briefly after order placement in the menu tab
             <div style={{ margin: '16px', padding: '14px', backgroundColor: '#065f46', border: '1px solid #10b981', borderRadius: '12px', textAlign: 'center' }}>
               🎉 سفارش شما ثبت و تحویل باریستای موتوپل شد! به زودی ارسال می‌شود.
             </div>
           )}
 
-          {/* TAB 1: منو و سفارش سریع */}
+          {/* TAB 1: Menu & Quick Order */}
           {activeTab === 'menu' && (
             <div style={{ padding: '16px' }}>
-              {/* تب‌های دسته‌بندی */}
-              <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '10px', marginBottom: '14px', scrollbarWidth: 'none' }}>
+              {/* Category Tabs */}
+              <div className="hide-scrollbar" style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '10px', marginBottom: '14px' }}>
                 {categories.map((cat) => (
                   <button
-                    key={cat}
-                    onClick={() => setActiveCategory(cat)}
+                    key={cat} onClick={() => setActiveCategory(cat)}
                     style={{
-                      padding: '8px 16px',
-                      borderRadius: '20px',
-                      border: 'none',
-                      whiteSpace: 'nowrap',
-                      fontSize: '0.85rem',
-                      fontWeight: 700,
+                      padding: '8px 16px', borderRadius: '20px', border: 'none', whiteSpace: 'nowrap',
+                      fontSize: '0.85rem', fontWeight: 700,
                       backgroundColor: activeCategory === cat ? '#f59e0b' : '#1e293b',
-                      color: activeCategory === cat ? '#0f172a' : '#94a3b8',
-                      cursor: 'pointer'
+                      color: activeCategory === cat ? '#0f172a' : '#94a3b8', cursor: 'pointer'
                     }}
                   >
                     {cat}
@@ -384,7 +460,7 @@ export default function MotopolApp() {
                 ))}
               </div>
 
-              {/* لیست کارت‌های محصولات */}
+              {/* Product List */}
               {loadingMenu ? (
                 <p style={{ textAlign: 'center', color: '#64748b', padding: '40px 0' }}>در حال آماده‌سازی منوی تازه...</p>
               ) : (
@@ -411,21 +487,9 @@ export default function MotopolApp() {
                             )}
                           </div>
                         </div>
-
                         <div>
                           {countInCart === 0 ? (
-                            <button
-                              onClick={() => addToCart(p)}
-                              style={{
-                                backgroundColor: '#1e293b',
-                                border: '1px solid #f59e0b',
-                                color: '#f59e0b',
-                                padding: '8px 16px',
-                                borderRadius: '8px',
-                                fontWeight: 700,
-                                cursor: 'pointer'
-                              }}
-                            >
+                            <button onClick={() => addToCart(p)} style={{ backgroundColor: '#1e293b', border: '1px solid #f59e0b', color: '#f59e0b', padding: '8px 16px', borderRadius: '8px', fontWeight: 700, cursor: 'pointer' }}>
                               + افزودن
                             </button>
                           ) : (
@@ -444,7 +508,7 @@ export default function MotopolApp() {
             </div>
           )}
 
-          {/* TAB 2: سبد سفارش و تسویه ۳ کلیکه */}
+          {/* TAB 2: Cart & 3-Click Checkout */}
           {activeTab === 'cart' && (
             <div style={{ padding: '16px' }}>
               <h2 style={{ fontSize: '1.2rem', color: '#f59e0b', marginBottom: '16px' }}>خلاصه سفارش</h2>
@@ -464,14 +528,12 @@ export default function MotopolApp() {
                         </div>
                       </div>
                     ))}
-                    
                     <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#94a3b8' }}>
                       <span>هزینه ارسال به {customer.shop_name}:</span>
                       <span style={{ color: isFreeDelivery ? '#10b981' : '#f8fafc' }}>
                         {isFreeDelivery ? 'رایگان (۲+ آیتم) 🎉' : '۱۵,۰۰۰ تومان'}
                       </span>
                     </div>
-
                     <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px dashed #475569', display: 'flex', justifyContent: 'space-between', fontSize: '1.1rem', fontWeight: 800 }}>
                       <span>مبلغ قابل پرداخت:</span>
                       <span style={{ color: '#f59e0b' }}>
@@ -479,13 +541,55 @@ export default function MotopolApp() {
                       </span>
                     </div>
                   </div>
+                  <button onClick={handleFinalOrder} disabled={submitting} className="btn-gold" style={{ width: '100%', padding: '16px', fontSize: '1.1rem', marginTop: '10px' }}>
+                    {submitting ? 'در حال ارسال به باریستا...' : `ثبت نهایی و ارسال به ${customer.shop: 'none', color: '#ef4444', fontSize: '1.2rem', cursor: 'pointer', fontWeight: 900 }}>-</button>
+                              <span style={{ fontWeight: 800, color: '#f8fafc', minWidth: '18px', textAlign: 'center' }}>{countInCart}</span>
+                              <button onClick={() => addToCart(p)} style={{ background: 'none', border: 'none', color: '#10b981', fontSize: '1.2rem', cursor: 'pointer', fontWeight: 900 }}>+</button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
-                  <button
-                    onClick={handleFinalOrder}
-                    disabled={submitting}
-                    className="btn-gold"
-                    style={{ width: '100%', padding: '16px', fontSize: '1.1rem', marginTop: '10px' }}
-                  >
+          {/* TAB 2: Cart & 3-Click Checkout */}
+          {activeTab === 'cart' && (
+            <div style={{ padding: '16px' }}>
+              <h2 style={{ fontSize: '1.2rem', color: '#f59e0b', marginBottom: '16px' }}>خلاصه سفارش</h2>
+              {cart.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '50px 0', color: '#64748b' }}>سبد شما خالی است ☕</div>
+              ) : (
+                <>
+                  <div className="card" style={{ padding: '16px', marginBottom: '16px' }}>
+                    {cart.map((item) => (
+                      <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #334155' }}>
+                        <div>
+                          <div style={{ fontWeight: 700, color: '#f8fafc' }}>{item.name}</div>
+                          <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>{item.quantity} × {item.final_price.toLocaleString('fa-IR')} ت</div>
+                        </div>
+                        <div style={{ fontWeight: 800, color: '#f59e0b' }}>
+                          {(item.quantity * item.final_price).toLocaleString('fa-IR')} تومان
+                        </div>
+                      </div>
+                    ))}
+                    <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#94a3b8' }}>
+                      <span>هزینه ارسال به {customer.shop_name}:</span>
+                      <span style={{ color: isFreeDelivery ? '#10b981' : '#f8fafc' }}>
+                        {isFreeDelivery ? 'رایگان (۲+ آیتم) 🎉' : '۱۵,۰۰۰ تومان'}
+                      </span>
+                    </div>
+                    <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px dashed #475569', display: 'flex', justifyContent: 'space-between', fontSize: '1.1rem', fontWeight: 800 }}>
+                      <span>مبلغ قابل پرداخت:</span>
+                      <span style={{ color: '#f59e0b' }}>
+                        {(totalPrice + (isFreeDelivery ? 0 : 15000)).toLocaleString('fa-IR')} تومان
+                      </span>
+                    </div>
+                  </div>
+                  <button onClick={handleFinalOrder} disabled={submitting} className="btn-gold" style={{ width: '100%', padding: '16px', fontSize: '1.1rem', marginTop: '10px' }}>
                     {submitting ? 'در حال ارسال به باریستا...' : `ثبت نهایی و ارسال به ${customer.shop_name} 🚀`}
                   </button>
                 </>
@@ -493,7 +597,34 @@ export default function MotopolApp() {
             </div>
           )}
 
-          {/* TAB 3: پروفایل CRM و باشگاه مشتریان */}
+          {/* TAB 4: Order Tracking */}
+          {activeTab === 'track' && (
+            <div style={{ padding: '16px' }}>
+              {!lastOrder ? (
+                <div style={{ textAlign: 'center', padding: '50px 0', color: '#64748b' }}>
+                  فع: 10, padding: 12, fontSize: 13 }}>
+                    <div style={{ color: '#8b949e', fontSize: 11, marginBottom: 6, fontWeight: 'bold' }}>
+                      اقلام سفارش:
+                    </div>
+                    {Array.isArray(lastOrder.items) && lastOrder.items.map((it, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', color: '#c9d1d9', padding: '3px 0' }}>
+                        <span>{it.name || it.title}</span>
+                        <span>×{it.quantity || it.count || 1}</span>
+                      </div>
+                    ))}
+                    {lastOrder.total_price != null && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', color: '#f59e0b', fontWeight: 800, marginTop: 8, paddingTop: 8, borderTop: '1px solid #21262d' }}>
+                        <span>مبلغ کل</span>
+                        <span>{Number(lastOrder.total_price).toLocaleString('fa-IR')} تومان</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 3: Profile & CRM */}
           {activeTab === 'profile' && (
             <div style={{ padding: '16px' }}>
               <div className="card" style={{ padding: '20px', textAlign: 'center', marginBottom: '16px' }}>
@@ -511,14 +642,7 @@ export default function MotopolApp() {
                   </div>
                 </div>
               </div>
-              
-              <button
-                onClick={() => {
-                  localStorage.removeItem('motopol_customer');
-                  setAuthStep('login');
-                }}
-                style={{ width: '100%', padding: '12px', background: 'none', border: '1px solid #ef4444', color: '#ef4444', borderRadius: '10px', cursor: 'pointer' }}
-              >
+              <button onClick={handleLogout} style={{ width: '100%', padding: '12px', background: 'none', border: '1px solid #ef4444', color: '#ef4444', borderRadius: '10px', cursor: 'pointer' }}>
                 خروج از حساب
               </button>
             </div>
@@ -526,28 +650,29 @@ export default function MotopolApp() {
 
           {/* Bottom Navigation Bar */}
           <nav style={{
-            position: 'fixed',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            maxWidth: '500px',
-            margin: '0 auto',
-            backgroundColor: '#161f30',
-            borderTop: '1px solid #22314d',
-            display: 'flex',
-            justifyContent: 'space-around',
-            padding: '10px 0',
-            zIndex: 100
+            position: 'fixed', bottom: 0, left: 0, right: 0, maxWidth: '500px', margin: '0 auto',
+            backgroundColor: '#161f30', borderTop: '1px solid #22314d', display: 'flex',
+            justifyContent: 'space-around', padding: '10px 0', zIndex: 100
           }}>
+            {/* Menu Tab */}
             <button onClick={() => setActiveTab('menu')} style={{ background: 'none', border: 'none', color: activeTab === 'menu' ? '#f59e0b' : '#64748b', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '0.8rem', gap: '4px' }}>
               <span style={{ fontSize: '1.3rem' }}>☕</span> منو
             </button>
+            {/* Cart Tab */}
             <button onClick={() => setActiveTab('cart')} style={{ position: 'relative', background: 'none', border: 'none', color: activeTab === 'cart' ? '#f59e0b' : '#64748b', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '0.8rem', gap: '4px' }}>
               <span style={{ fontSize: '1.3rem' }}>🛒</span> سبد
               {totalItemsCount > 0 && (
                 <span style={{ position: 'absolute', top: '-4px', right: '10px', backgroundColor: '#f59e0b', color: '#000', borderRadius: '10px', padding: '1px 6px', fontSize: '0.7rem', fontWeight: 800 }}>{totalItemsCount}</span>
               )}
             </button>
+            {/* Track Tab */}
+            <button onClick={() => setActiveTab('track')} style={{ position: 'relative', background: 'none', border: 'none', color: activeTab === 'track' ? '#f59e0b' : '#64748b', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '0.8rem', gap: '4px' }}>
+              <span style={{ fontSize: '1.3rem' }}>🛵</span> پیگیری
+              {lastOrder && !['delivered', 'cancelled', 'completed'].includes(lastOrder.status) && (
+                <span style={{ position: 'absolute', top: '-2px', left: '14px', width: 8, height: 8, borderRadius: '50%', background: '#10b981' }} />
+              )}
+            </button>
+            {/* Profile Tab */}
             <button onClick={() => setActiveTab('profile')} style={{ background: 'none', border: 'none', color: activeTab === 'profile' ? '#f59e0b' : '#64748b', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '0.8rem', gap: '4px' }}>
               <span style={{ fontSize: '1.3rem' }}>👤</span> پروفایل
             </button>
