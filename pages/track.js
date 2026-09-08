@@ -4,10 +4,10 @@ import { supabase } from '../lib/supabase';
 import { playDingSound } from '../lib/sound';
 
 const STEPS = [
-  { key: 'pending', label: 'ثبت سفارش', icon: '📝' },
-  { key: 'processing', label: 'آماده‌سازی', icon: '☕' },
-  { key: 'out_for_delivery', label: 'پیک در مسیر', icon: '🛵' },
-  { key: 'delivered', label: 'تحویل داده شد', icon: '✅' }
+  { key: 'pending',          label: 'ثبت سفارش',    icon: '📝' },
+  { key: 'processing',       label: 'آماده‌سازی',   icon: '☕' },
+  { key: 'out_for_delivery', label: 'پیک در مسیر',  icon: '🛵' },
+  { key: 'delivered',        label: 'تحویل شد',     icon: '✅' }
 ];
 
 export default function TrackOrder() {
@@ -18,149 +18,170 @@ export default function TrackOrder() {
 
   const handleSearch = async (e) => {
     if (e) e.preventDefault();
-    if (!phone) return;
-
+    if (!phone.trim()) return;
     setLoading(true);
     setSearched(true);
-
     const { data, error } = await supabase
       .from('orders')
       .select('*')
       .eq('phone', phone.trim())
       .order('created_at', { ascending: false });
-
-    if (!error) {
-      setOrders(data || []);
-    }
+    if (!error) setOrders(data || []);
     setLoading(false);
   };
 
-  // مانیتورینگ زنده برای کاربر
   useEffect(() => {
-    if (!phone) return;
-
+    if (!phone.trim()) return;
     const channel = supabase
       .channel('customer_track_channel')
-      .on(
-        'postgres_changes',
+      .on('postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'orders', filter: `phone=eq.${phone.trim()}` },
         (payload) => {
-          setOrders((prev) =>
-            prev.map((o) => (o.id === payload.new.id ? payload.new : o))
-          );
-          playDingSound(); // اعلان تغییر وضعیت به مشتری
-        }
-      )
+          setOrders((prev) => prev.map((o) => (o.id === payload.new.id ? payload.new : o)));
+          playDingSound();
+        })
       .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => supabase.removeChannel(channel);
   }, [phone]);
 
-  const getStepIndex = (status) => {
+  const stepIndex = (status) => {
     if (status === 'cancelled') return -1;
-    const index = STEPS.findIndex((s) => s.key === status);
-    return index === -1 ? 0 : index;
+    const i = STEPS.findIndex((s) => s.key === status);
+    return i === -1 ? 0 : i;
   };
 
   return (
-    <div className="min-h-screen bg-[#0d1117] text-slate-100 p-4 md:p-8 font-sans" dir="rtl">
-      <div className="max-w-2xl mx-auto">
-        <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-amber-400">پیگیری لحظه‌ای سفارش موتوپل</h1>
-          <p className="text-xs text-slate-400 mt-1">شماره همراه ثبت‌شده هنگام سفارش را وارد نمایید</p>
+    <div style={{
+      minHeight: '100vh', background: '#0d1117', color: '#e2e8f0',
+      padding: 24, direction: 'rtl', fontFamily: 'Tahoma, Vazirmatn, sans-serif'
+    }}>
+      <div style={{ maxWidth: 640, margin: '0 auto' }}>
+        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          <h1 style={{ fontSize: 22, color: '#f59e0b', margin: 0 }}>پیگیری لحظه‌ای سفارش موتوپل</h1>
+          <p style={{ fontSize: 13, color: '#8b949e', marginTop: 6 }}>
+            شماره همراه ثبت‌شده هنگام سفارش را وارد نمایید
+          </p>
         </div>
 
         {/* فرم جستجو */}
-        <form onSubmit={handleSearch} className="flex gap-2 mb-8">
+        <form onSubmit={handleSearch} style={{ display: 'flex', gap: 8, marginBottom: 32 }}>
           <input
             type="tel"
             placeholder="مثال: 09123456789"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
-            className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-amber-500 text-center tracking-wider"
+            style={{
+              flex: 1, background: '#161b22', border: '1px solid #30363d', borderRadius: 10,
+              padding: '12px 16px', color: '#e2e8f0', fontSize: 14,
+              textAlign: 'center', direction: 'ltr', outline: 'none'
+            }}
           />
-          <button
-            type="submit"
-            className="bg-amber-500 hover:bg-amber-600 text-black font-bold px-6 py-3 rounded-xl text-sm transition-all"
-          >
+          <button type="submit" style={{
+            background: '#f59e0b', color: '#000', fontWeight: 'bold', border: 'none',
+            borderRadius: 10, padding: '0 24px', fontSize: 14, cursor: 'pointer'
+          }}>
             {loading ? '...' : 'پیگیری'}
           </button>
         </form>
 
-        {/* نتایج */}
-        {searched && (
-          <div className="space-y-6">
-            {orders.length === 0 ? (
-              <div className="text-center p-8 bg-slate-900/50 rounded-xl border border-slate-800 text-slate-400 text-sm">
-                سفارشی با این شماره همراه یافت نشد.
-              </div>
-            ) : (
-              orders.map((order) => {
-                const currentIdx = getStepIndex(order.status);
-                const isCancelled = order.status === 'cancelled';
-
-                return (
-                  <div key={order.id} className="bg-[#161b22] border border-slate-800 rounded-2xl p-6 shadow-xl">
-                    <div className="flex justify-between items-center pb-4 border-b border-slate-800 text-xs text-slate-400">
-                      <span>سفارش: {order.shop_name || 'کافه'}</span>
-                      <span>{new Date(order.created_at).toLocaleDateString('fa-IR')}</span>
-                    </div>
-
-                    {isCancelled ? (
-                      <div className="my-6 p-4 bg-rose-500/10 border border-rose-500/30 rounded-xl text-center text-rose-400 text-sm font-medium">
-                        این سفارش لغو شده است.
-                      </div>
-                    ) : (
-                      /* تایم‌لاین بصری مراحل */
-                      <div className="my-8">
-                        <div className="grid grid-cols-4 relative">
-                          <div className="absolute top-1/2 left-0 right-0 h-1 bg-slate-800 -translate-y-1/2 z-0" />
-                          {STEPS.map((step, idx) => {
-                            const isDone = currentIdx >= idx;
-                            const isCurrent = currentIdx === idx;
-
-                            return (
-                              <div key={step.key} className="flex flex-col items-center relative z-10">
-                                <div
-                                  className={`w-10 h-10 rounded-full flex items-center justify-center text-base border-2 transition-all ${
-                                    isCurrent
-                                      ? 'bg-amber-500 border-amber-300 text-black shadow-lg shadow-amber-500/30 scale-110'
-                                      : isDone
-                                      ? 'bg-emerald-600 border-emerald-400 text-white'
-                                      : 'bg-slate-900 border-slate-700 text-slate-500'
-                                  }`}
-                                >
-                                  {step.icon}
-                                </div>
-                                <span className={`text-[11px] mt-2 font-medium ${isCurrent ? 'text-amber-400 font-bold' : isDone ? 'text-slate-200' : 'text-slate-500'}`}>
-                                  {step.label}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* اقلام */}
-                    <div className="bg-slate-900/60 rounded-xl p-3 text-xs space-y-1">
-                      <div className="text-slate-400 font-semibold mb-1">اقلام سفارش داده شده:</div>
-                      {Array.isArray(order.items) &&
-                        order.items.map((it, i) => (
-                          <div key={i} className="flex justify-between text-slate-300">
-                            <span>{it.name || it.title}</span>
-                            <span>{it.quantity || it.count || 1} عدد</span>
-                          </div>
-                        ))}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+        {searched && orders.length === 0 && (
+          <p style={{
+            textAlign: 'center', color: '#8b949e', padding: 32,
+            background: '#161b22', borderRadius: 12, border: '1px solid #21262d'
+          }}>سفارشی با این شماره همراه یافت نشد.</p>
         )}
+
+        {orders.map((order) => {
+          const idx = stepIndex(order.status);
+          const cancelled = order.status === 'cancelled';
+          return (
+            <div key={order.id} style={{
+              background: '#161b22', border: '1px solid #21262d',
+              borderRadius: 16, padding: 24, marginBottom: 20
+            }}>
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', fontSize: 12,
+                color: '#8b949e', paddingBottom: 12, borderBottom: '1px solid #21262d'
+              }}>
+                <span>سفارش: {order.shop_name || 'کافه'}</span>
+                <span>{new Date(order.created_at).toLocaleDateString('fa-IR')}</span>
+              </div>
+
+              {cancelled ? (
+                <div style={{
+                  margin: '20px 0', padding: 16, textAlign: 'center',
+                  background: '#3f0d16', border: '1px solid #e11d48',
+                  borderRadius: 12, color: '#fb7185', fontSize: 13
+                }}>این سفارش لغو شده است.</div>
+              ) : (
+                /* تایم‌لاین */
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between',
+                  alignItems: 'flex-start', margin: '28px 8px', position: 'relative'
+                }}>
+                  <div style={{
+                    position: 'absolute', top: 19, right: '12%', left: '12%',
+                    height: 3, background: '#30363d', zIndex: 0
+                  }} />
+                  <div style={{
+                    position: 'absolute', top: 19, right: '12%',
+                    width: `${(idx / (STEPS.length - 1)) * 76}%`, height: 3,
+                    background: '#f59e0b', zIndex: 1, transition: 'width .4s'
+                  }} />
+                  {STEPS.map((step, i) => {
+                    const done = idx >= i;
+                    const now = idx === i;
+                    return (
+                      <div key={step.key} style={{
+                        display: 'flex', flexDirection: 'column',
+                        alignItems: 'center', zIndex: 2, width: 70
+                      }}>
+                        <div style={{
+                          width: 40, height: 40, borderRadius: '50%',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 18, border: `2px solid ${now ? '#fbbf24' : done ? '#059669' : '#30363d'}`,
+                          background: now ? '#f59e0b' : done ? '#064e3b' : '#0d1117',
+                          boxShadow: now ? '0 0 14px rgba(245,158,11,.5)' : 'none'
+                        }}>{step.icon}</div>
+                        <span style={{
+                          fontSize: 11, marginTop: 8,
+                          color: now ? '#f59e0b' : done ? '#c9d1d9' : '#8b949e',
+                          fontWeight: now ? 'bold' : 'normal', textAlign: 'center'
+                        }}>{step.label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* اقلام */}
+              <div style={{ background: '#0d1117', borderRadius: 10, padding: 12, fontSize: 13 }}>
+                <div style={{ color: '#8b949e', fontSize: 11, marginBottom: 6, fontWeight: 'bold' }}>
+                  اقلام سفارش:
+                </div>
+                {Array.isArray(order.items) && order.items.map((it, i) => (
+                  <div key={i} style={{
+                    display: 'flex', justifyContent: 'space-between',
+                    color: '#c9d1d9', padding: '3px 0'
+                  }}>
+                    <span>{it.name || it.title}</span>
+                    <span>×{it.quantity || it.count || 1}</span>
+                  </div>
+                ))}
+                {order.total_price != null && (
+                  <div style={{
+                    display: 'flex', justifyContent: 'space-between',
+                    color: '#f59e0b', fontWeight: 'bold',
+                    marginTop: 8, paddingTop: 8, borderTop: '1px solid #21262d'
+                  }}>
+                    <span>مبلغ کل</span>
+                    <span>{Number(order.total_price).toLocaleString('fa-IR')} تومان</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
