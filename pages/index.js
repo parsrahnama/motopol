@@ -268,8 +268,8 @@ export default function MotopolApp() {
         .empty { text-align: center; color: #64748b; padding: 40px 10px; font-size: 15px; }
         .qty-box { display: flex; align-items: center; gap: 10px; }
         .qty-btn { background: #334155; color: #fff; border: none; width: 32px; height: 32px; border-radius: 8px; font-size: 16px; cursor: pointer; font-weight: 700; }
-        .-items: center;: flex; justify-content: space-between; align-items: center; }
-        .cart-item-name { font-weight: 700; margin-bottom: 4px; font-size: 15px; }
+        .cart-row { display: flex; justify-content: space-between; align-items: center; }
+                .cart-item-name { font-weight: 700; margin-bottom: 4px; font-size: 15px; }
         .cart-item-meta { color: #94a3b8; font-size: 12px; }
         .summary-row { display: flex; justify-content: space-between; font-size: 14px; color: #cbd5e1; margin-bottom: 8px; }
         .total-row { display: flex; justify-content: space-between; font-weight: 800; font-size: 17px; border-top: 1px solid #334155; padding-top: 12px; margin-top: 4px; }
@@ -316,8 +316,9 @@ export default function MotopolApp() {
           </div>
           <form onSubmit={handleRegisterSubmit}>
             <input className="input" type="text" placeholder="نام و نام خانوادگی" value={regData.fullName} onChange={(e) => setRegData({ ...regData, fullName: e.target.value })} required />
-            <input className="input" type="tel" placeholder="شماره موبایل" value={regData.phone} onChange={(e) => setRegData({ ...reg={(e) => setRegData({ ...regData, phone: e.target.value }) type="text" placeholder="نام مغازه / فروشگاه" value={regData.shopName} onChange={(e) => setRegData({ ...regData, shopName: e.target.value })} required />
-            <input className="input" type="text" placeholder="آدرس دقیق" value={regData.shopAddress} onChange={(e) => setRegData({ ...regData, shopAddress: e.target.value })} required />
+                        <input className="input" type="tel" placeholder="شماره موبایل" value={regData.phone} onChange={(e) => setRegData({ ...regData, phone: e.target.value })} required />
+            <input className="input" type="text" placeholder="نام مغازه / فروشگاه" value={regData.shopName} onChange={(e) => setRegData({ ...regData, shopName: e.target.value })} required />
+        <input className="input" type="text" placeholder="آدرس دقیق" value={regData.shopAddress} onChange={(e) => setRegData({ ...regData, shopAddress: e.target.value })} required />
             <input className="input" type="text" placeholder="توضیحات تحویل (اختیاری)" value={regData.addressNotes} onChange={(e) => setRegData({ ...regData, addressNotes: e.target.value })} />
             <button type="submit" className="btn-gold" disabled={submitting}>{submitting ? 'در حال ثبت...' : 'ثبت و ورود'}</button>
           </form>
