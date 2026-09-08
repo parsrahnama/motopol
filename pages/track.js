@@ -72,15 +72,14 @@ export default function TrackOrder() {
             onChange={(e) => setPhone(e.target.value)}
             style={{
               flex: 1, background: '#161b22', border: '1px solid #30363d', borderRadius: 10,
-              padding: '12px 16px', color: '#e2e8f0', fontSize: 14,
-              textAlign: 'center', direction: 'ltr', outline: 'none'
+              padding: '12px 16px', color: '#e2e8f0', fontSize: 14, outline: 'none'
             }}
           />
           <button type="submit" style={{
             background: '#f59e0b', color: '#000', fontWeight: 'bold', border: 'none',
             borderRadius: 10, padding: '0 24px', fontSize: 14, cursor: 'pointer'
           }}>
-            {loading ? '...' : 'پیگیری'}
+            {loading ? '...' : '⚡ پیگیری'}
           </button>
         </form>
 
@@ -88,7 +87,7 @@ export default function TrackOrder() {
           <p style={{
             textAlign: 'center', color: '#8b949e', padding: 32,
             background: '#161b22', borderRadius: 12, border: '1px solid #21262d'
-          }}>سفارشی با این شماره همراه یافت نشد.</p>
+          }}>سفارشی با این شماره موه همراه یافت نشد.</p>
         )}
 
         {orders.map((order) => {
@@ -104,7 +103,7 @@ export default function TrackOrder() {
                 color: '#8b949e', paddingBottom: 12, borderBottom: '1px solid #21262d'
               }}>
                 <span>سفارش: {order.shop_name || 'کافه'}</span>
-                <span>{new Date(order.created_at).toLocaleDateString('fa-IR')}</span>
+                <span>{order.created_at ? new Date(order.created_at).toLocaleDateString('fa-IR') : ''}</span>
               </div>
 
               {cancelled ? (
@@ -128,6 +127,7 @@ export default function TrackOrder() {
                     width: `${(idx / (STEPS.length - 1)) * 76}%`, height: 3,
                     background: '#f59e0b', zIndex: 1, transition: 'width .4s'
                   }} />
+
                   {STEPS.map((step, i) => {
                     const done = idx >= i;
                     const now = idx === i;
@@ -144,9 +144,9 @@ export default function TrackOrder() {
                           boxShadow: now ? '0 0 14px rgba(245,158,11,.5)' : 'none'
                         }}>{step.icon}</div>
                         <span style={{
-                          fontSize: 11, marginTop: 8,
+                          fontSize: 11, marginTop: 8, textAlign: 'center',
                           color: now ? '#f59e0b' : done ? '#c9d1d9' : '#8b949e',
-                          fontWeight: now ? 'bold' : 'normal', textAlign: 'center'
+                          fontWeight: now ? 'bold' : 'normal'
                         }}>{step.label}</span>
                       </div>
                     );
