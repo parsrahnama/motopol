@@ -5,9 +5,11 @@ import { playDingSound } from '../lib/sound';
 
 const STATUS_MAP = {
   pending:          { label: 'در انتظار تایید',     bg: '#3b2f0b', fg: '#fbbf24', border: '#a16207' },
-  processing:       { label: 'در حال آماده‌سازی',   bg: '#172554', fg: '#60a5fa', border: '#2563eb' },
-  out_for_delivery: { label: 'در حال ارسال (پیک)',  bg: '#2e1065', fg: '#c084fc', border: '#7c3aed' },
-  delivered:        { label: 'تحویل داده شد',       bg: '#06281e', fg: '#34d399', border: '#059669' },
+  processing:       { label: 'در حال';
+
+const STATUS_MAP = {
+  pending:          { label: 'در انتظار تایید',     bg: '#3b2f0b', fg: '#fbbf24', border: '#a16207' },
+  processing:       { label: 'در حال آماده‌سازی',   bg: '#172 { label: 'تحویل داده شد',       bg: '#06281e', fg: '#34d399', border: '#059669' },
   cancelled:        { label: 'لغو شده',             bg: '#3f0d16', fg: '#fb7185', border: '#e11d48' }
 };
 
@@ -23,18 +25,20 @@ export default function AdminPanel() {
   }, []);
 
   const toggleSound = () => {
-    const next = !soundEnabled;
-    setSoundEnabled(next);
-    localStorage.setItem('motopol_sound_enabled', String(next));
-    if (next) playDingSound();
+    setSoundEnabled((prev) => {
+      const next = !prev;
+      localStorage.setItem('motopol_sound_enabled', String(next));
+      return next;
+    });
+    if (!soundEnabled) playDingSound();
   };
 
   const fetchOrders = async () => {
     setLoading(true);
-    const { data, error } = await await supabase
+    const { data, error } = await supabase
       .from('orders')
       .select('*')
-      .ordercreated_at', { ascending: false });
+      .order('created_at', { ascending: false });
     if (error) console.error('خطا در دریافت سفارش‌ها:', error);
     else setOrders(data || []);
     setLoading(false);
@@ -52,12 +56,11 @@ export default function AdminPanel() {
           setOrders((prev) => prev.map((o) => (o.id === payload.new.id ? payload.new : o)));
           playDingSound();
         } else if (payload.eventType === 'DELETE') {
-          setOrders((prev) => prev.filter((o) => o.id === payload.old.id));
-       .id));
+          setOrders((prev) => prev.filter((o) => o.id !== payload.old.id));
         }
       })
       .subscribe();
-    return () => supChannel(channel);
+    return () => supabase.removeChannel(channel);
   }, []);
 
   const updateStatus = async (orderId, newStatus) => {
@@ -69,17 +72,17 @@ export default function AdminPanel() {
   };
 
   const filtered = filterStatus === 'all'
+    ?_at: new Date().toISOString() })
+      .eq('id', orderId);
+    if (error) alert('خطا در تغییر وضعیت: ' + error.message);
+  };
+
+  const filtered = filterStatus === 'all'
     ? orders
     : orders.filter((o) => (o.status || 'pending') === filterStatus);
 
   const btn = (bg, fg, border) => ({
-    padding: '6px 10px', fontSize: 12, borderRadius: 8, cursor: 'pointer',
-    background: bg, color: fg, border: `1px solid ${border}`
-  });
-
-  return (
-    <div style={{
-      minHeight: '100vh', background: '#0d1117', color: '#e2e8f0',
+    padding: '6px 10px', fontSize: 12,7', color: '#e2e8f0',
       padding: 24, direction: 'rtl', fontFamily: 'Tahoma, Vazirmatn, sans-serif'
     }}>
       {/* هدر */}
@@ -113,19 +116,21 @@ export default function AdminPanel() {
 
       {/* فیلترها */}
       <div style={{ maxWidth: 900, margin: '16px auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {[['all', `همه (${orders.length})`],
+        {[
+          ['all', `همه (${orders.length})`],
           ...Object.entries(STATUS_MAP).map(([k, v]) =>
-            [k, `${v.label} (${orders.filter((o) => (o.status || 'pending') === k).length})`])
+            [k, `${v.label} (${orders.filter((o) => (o.status || 'pending') === k).length})`]
+          )
         ].map(([key, label]) => (
-          <button key={key} onClick={() => setFilterStatus(key)}
+          <button
+            key={key}
+            onClick={() => setFilterStatus(key)}
             style={btn(
               filterStatus === key ? '#f59e0b' : '#21262d',
               filterStatus === key ? '#000' : '#c9d1d9',
-              filterStatus === key ? '#f59e0b' : '#30363d',
+              filterStatus === key ? '#f59e0b' : '#30363d'
             )}
-          >
-            {label}
-          </button>
+          >{label}</button>
         ))}
       </div>
 
@@ -199,22 +204,30 @@ export default function AdminPanel() {
                   display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center'
                 }}>
                   <span style={{ fontSize: 11, color: '#8b949e' }}>تغییر وضعیت:</span>
-                  <button disabled={current === 'processing'} onClick={() => updateStatus(order.id, 'processing')}
-                    style={{ ...btn('#172554', '#60a5fa', '#2563eb'), opacity: current === 'processing' ? 0.4 : 1 }}>
-                    ☕ آماده‌سازی
-                  </button>
-                  <button disabled={current === 'out_for_delivery'} onClick={() => updateStatus(order.id, 'out_for_delivery')}
-                    style={{ ...btn('#2e1065', '#c084fc', '#7c3aed'), opacity: current === 'out_for_delivery' ? 0.4 : 1 }}>
-                    🛵 ارسال پیک
-                  </button>
-                  <button disabled={current === 'delivered'} onClick={() => updateStatus(order.id, 'delivered')}
-                    style={{ ...btn('#06281e', '#34d399', '#059669'), opacity: current === 'delivered' ? 0.4 : 1 }}>
-                    ✅ تحویل شد
-                  </button>
-                  <button disabled={current === 'cancelled'} onClick={() => updateStatus(order.id, 'cancelled')}
-                    style={{ ...btn('#3f0d16', '#fb7185', '#e11d48'), opacity: current === 'cancelled' ? 0.4 : 1 }}>
-                    ❌ لغو
-                  </button>
+
+                  <button
+                    disabled={current === 'processing'}
+                    onClick={() => updateStatus(order.id, 'processing')}
+                    style={{ ...btn('#172554', '#60a5fa', '#2563eb'), opacity: current === 'processing' ? 0.4 : 1 }}
+                  >☕ آماده‌سازی</button>
+
+                  <button
+                    disabled={current === 'out_for_delivery'}
+                    onClick={() => updateStatus(order.id, 'out_for_delivery')}
+                    style={{ ...btn('#2e1065', '#c084fc', '#7c3aed'), opacity: current === 'out_for_delivery' ? 0.4 : 1 }}
+                  >🛵 ارسال پیک</button>
+
+                  <button
+                    disabled={current === 'delivered'}
+                    onClick={() => updateStatus(order.id, 'delivered')}
+                    style={{ ...btn('#06281e', '#34d399', '#059669'), opacity: current === 'delivered' ? 0.4 : 1 }}
+                  >✅ تحویل شد</button>
+
+                  <button
+                    disabled={current === 'cancelled'}
+                    onClick={() => updateStatus(order.id, 'cancelled')}
+                    style={{ ...btn('#3f0d16', '#fb7185', '#e11d48'), opacity: current === 'cancelled' ? 0.4 : 1 }}
+                  >❌ لغو</button>
                 </div>
               </div>
             );
