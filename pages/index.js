@@ -13,14 +13,12 @@ export default function MotopolApp() {
   const [customer, setCustomer] = useState(null);
   const [phoneInput, setPhoneInput] = useState('');
   const [authStep, setAuthStep] = useState('checking');
-
   const [regData, setRegData] = useState({
     fullName: '', phone: '', shopName: '', shopAddress: '', addressNotes: ''
   });
-
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
-  const const [cart, setActiveCategory] = useState('همه');
+  const [activeCategory, setActiveCategory] = useState('همه');
   const [cart, setCart] = useState([]);
   const [loadingMenu, setLoadingMenu] = useState(true);
   const [lastOrder, setLastOrder] = useState(null);
@@ -29,72 +27,82 @@ export default function MotopolApp() {
   const orderChannel = useRef(null);
 
   useEffect(() => {
-    const initializeApp = async () => {
-      const saved = localStorage.getItem('motopol_customer');
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          await refreshCustomerData(parsed.phone);
-        } catch (e) {
-          setAuthStep('login');
-        }
-      } else {
-        setAuthStep('login');
-      }
-      await fetchProducts();
-    };
     initializeApp();
   }, []);
 
-  async function refreshCustomerData(phone) {
+  async function initializeApp() {
+    const storedPhone = localStorage.getItem('motopol_phone');
+    if (storedPhone) {
+      setPhoneInput(storedPhone);
+      await checkCustomer(storedPhone);
+    } else {
+      setAuthStep('login');
+    }
+  }
+
+  async function checkCustomer(phone) {
+    setAuthStep('checking');
     try {
-      const { data, error } = await supabase
-        .from('customers').select('*').eq('phone', phone).single();
-      if (data && !error) {
+      const { data, error } = await supabase.from('customers').select('*').eq('phone', phone).single();
+      if (data) {
         setCustomer(data);
-        localStorage.setItem('motopol_customer', JSON.stringify(data));
         setAuthStep('app');
         await fetchLastOrder(phone);
+        localStorage.setItem('motopol_phone', phone);
       } else {
-        setAuthStep('login');
+        setAuthStep('register');
       }
+      if (error) throw error;
     } catch (e) {
+      console.error("Error checking customer:", e);
+      setAuthStep('login');
+    }
+  }
+
+  async function refreshCustomerData(phone) {
+    try {
+      const { data, error } = await supabase.from('customers').select('*').eq('phone', phone).single();
+      if (error) throw error;
+      setCustomer(data);
+      setAuthStep('app');
+      await fetchLastOrder(phone);
+    } catch (e) {
+      console.error("Error refreshing customer data:", e);
       setAuthStep('login');
     }
   }
 
   async function fetchLastOrder(phone) {
     try {
-      const { data, error } = await supabase
-        .from('orders').select('*')
+      const { data, error } = await supabase.from('orders').select('*')
         .eq('phone', phone)
         .in('status', ['pending', 'processing', 'out_for_delivery'])
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
-      if (!error && data) {
-        setLastOrder(data);
+      if (error) throw error;
+      setLastOrder(data);
+      if (data) {
         setActiveTab('track');
+        subscribeToOrderUpdates(data.id);
       } else {
         setLastOrder(null);
       }
     } catch (err) {
-      console.error(err);
+      console.error("Error fetching last order:", err);
     }
   }
 
   async function fetchProducts() {
     setLoadingMenu(true);
     try {
-      const { data, error } = await supabase
-        .from('products').select('*').eq('is_active', true)
+      const { data, error } = await supabase.from('products').select('*').eq('is_active', true)
         .order('created_at', { ascending: true });
-      if (!error && data) {
-        setProducts(data);
-        setCategories(['همه', ...new Set(data.map(p => p.category).filter(Boolean))]);
-      }
+      if (error) throw error;
+      setProducts(data);
+      setCategories(['همه', ...new Set(data.map(p => p.category).filter(Boolean))]);
     } catch (err) {
-      console.error(err);
+      console.error("Error fetching products:", err);
     } finally {
       setLoadingMenu(false);
     }
@@ -102,25 +110,15 @@ export default function MotopolApp() {
 
   const handleLoginSubmit = async (e) => {
     e.preventDefault();
-    if (!phoneInput || phoneInput.length < 10) {
+    if (!phoneInput.trim()) {
       alert('لطفاً شماره موبایل معتبر وارد کنید.');
       return;
     }
     setSubmitting(true);
     try {
-      const { data, error } = await supabase
-        .from('customers').select('*').eq('phone', phoneInput.trim()).single();
-      if (data && !error) {
-        setCustomer(data);
-        localStorage.setItem('motopol_customer', JSON.stringify(data));
-        setAuthStep('app');
-        await fetchLastOrder(phoneInput.trim());
-      } else {
-        setRegData(prev => ({ ...prev, phone: phoneInput.trim() }));
-        setAuthStep('register');
-      }
-    } catch (err) {
-      alert('خطا در ورود: ' + err.message);
+      await checkCustomer(phoneInput.trim());
+    } catch (e) {
+      alert('خطا در ورود: ' + e.message);
     } finally {
       setSubmitting(false);
     }
@@ -128,63 +126,78 @@ export default function MotopolApp() {
 
   const handleRegisterSubmit = async (e) => {
     e.preventDefault();
+    if (!regData.fullName || !regData.phone || !regData.shopName || !regData.shopAddress) {
+      alert('لطفاً تمام اطلاعات خواسته شده را تکمیل کنید.');
+      return;
+    }
     setSubmitting(true);
     try {
-      const { data, error } = await supabase.from('customers').insert([{
-        phone: regData.phone,
-        full_name: regData.fullName,
-        shop_name: regData.shopName,
-        shop_address: regData.shopAddress,
-        address_notes: regData.addressNotes,
-        is_vip: false,
-        order_count: 0,
-        total_spent: 0
-      }]).select().single();
-      if (error) throw error;
-      setCustomer(data);
-      localStorage.setItem('motopol_customer', JSON.stringify(data));
-      setAuthStep('app');
-    } catch (err) {
-      alert('خطا در ثبت‌نام: ' + err.message);
+      const { data: existingCustomer, error: checkError } = await supabase.from('customers').select('*').eq('phone', regData.phone).single();
+      if (checkError) throw checkError;
+
+      if (existingCustomer) {
+        setCustomer(existingCustomer);
+        setAuthStep('app');
+        await fetchLastOrder(regData.phone);
+        localStorage.setItem('motopol_phone', regData.phone);
+      } else {
+        const { data, error } = await supabase.from('customers').insert([{
+          phone: regData.phone,
+          full_name: regData.fullName,
+          shop_name: regData.shopName,
+          shop_address: regData.shopAddress,
+          address_notes: regData.addressNotes,
+          is_vip: false,
+          order_count: 0,
+          total_spent: 0
+        }]).select().single();
+        if (error) throw error;
+        setCustomer(data);
+        setAuthStep('app');
+        await fetchLastOrder(data.phone);
+        localStorage.setItem('motopol_phone', data.phone);
+      }
+    } catch (e) {
+      alert('خطا در ثبت‌نام: ' + e.message);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const getProductPrice = (item) => {
-    if (customer && customer.is_vip && item.vip_price) return Number(item.vip_price);
-    return Number(item.base_price) || 0;
-  };
-
   const addToCart = (product) => {
-    setCart(prev => {
-      const exist = prev.find(i => i.id === product.id);
-      const price = getProductPrice(product);
- i if (exist) {
-        return prev.map(i => i.id === product.id ? { ...i, quantity: i.quantity + 1, final_price: price } : i);
+    setCart(prevCart => {
+      const existingItemIndex = prevCart.findIndex(item => item.id === product.id);
+      if (existingItemIndex > -1) {
+        const newCart = [...prevCart];
+        newCart[existingItemIndex].quantity += 1;
+        return newCart;
+      } else {
+        return [...prevCart, { ...product, quantity: 1, final_price: product.price }];
       }
-      return [...prev, { ...product, final_price: price, quantity: 1 }];
     });
   };
 
-  const removeFromCart = (productId) => {
-    setCart(prev => {
-      const exist = prev.find(i => i.id === productId);
-      if (exist && exist.quantity > 1) {
-        const price = getProductPrice(exist);
-        return prev.map(i => i.id === productId ? { ...i, quantity: i.quantity - 1, final_price: price } : i);
+  const updateCartQuantity = (productId, quantity) => {
+    setCart(prevCart => {
+      if (quantity <= 0) {
+        return prevCart.filter(item => item.id !== productId);
       }
-      return prev.filter(i => i.id !== productId);
+      return prevCart.map(item =>
+        item.id === productId ? { ...item, quantity: quantity, final_price: item.price * quantity } : item
+      );
     });
   };
 
-  const totalItemsCount = cart.reduce((s, i) => s + i.quantity, 0);
-  const totalPrice = cart.reduce((sum, item) => sum + item.final_price * item.quantity, 0);
-  const isFreeDelivery = totalItemsCount >= 2;
-  const grandTotal = totalPrice + (isFreeDelivery ? 0 : 15000);
+  const grandTotal = cart.reduce((total, item) => total + item.final_price, 0);
+  const isFreeDelivery = cart.length >= 2;
+  const deliveryFee = isFreeDelivery ? 0 : 15000;
 
-  const handleFinalOrder = async () => {
-    if (cart.length === 0) return;
+  const handlePlaceOrder = async () => {
+    if (!customer) return;
+    if (cart.length === 0) {
+      alert('سبد خرید شما خالی است.');
+      return;
+    }
     setSubmitting(true);
     try {
       const { data, error } = await supabase.from('orders').insert([{
@@ -193,70 +206,77 @@ export default function MotopolApp() {
         shop_name: customer.shop_name,
         phone: customer.phone,
         shop_address: customer.shop_address + (customer.address_notes ? ` (${customer.address_notes})` : ''),
-        items: cart,
+        items: cart.map(({ final_price, ...rest }) => rest), // Save base product info without final_price
         total_price: grandTotal,
-        delivery_fee: isFreeDelivery ? 0 : 15000,
+        delivery_fee: deliveryFee,
         status: 'pending'
       }]).select().single();
+
       if (error) throw error;
 
       await supabase.from('customers').update({
-        order_count: (customer.order_count || 0) + 1,
-        total_spent: Number(customer.total_spent || 0) + grandTotal
+        order_count: (customer.order_count | 0) + 1,
+        total_spent: Number(customer.total_spent | 0) + grandTotal
       }).eq('id', customer.id);
 
       setLastOrder(data);
       setCart([]);
       setActiveTab('track');
-    } catch (err) {
-      alert('خطا در ثبت سفارش: ' + err.message);
+      subscribeToOrderUpdates(data.id);
+
+    } catch (e) {
+      alert('خطا در ثبت سفارش: ' + e.message);
     } finally {
       setSubmitting(false);
     }
   };
 
+  const subscribeToOrderUpdates = (orderId) => {
+    if (orderChannel.current) {
+      supabase.removeChannel(orderChannel.current);
+    }
+    orderChannel.current = supabase.channel(`order_track_${orderId}`)
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${orderId}` },
+        (payload) => {
+          setLastOrder(payload.new);
+          if (payload.new.status === 'delivered') {
+            // Optionally unsubscribe after delivery
+            // supabase.removeChannel(orderChannel.current);
+          }
+        }
+      )
+      .subscribe();
+  };
+
   useEffect(() => {
+    if (lastOrder) {
+      fetchProducts(); // Fetch products once when app loads if lastOrder exists (user is logged in)
+    }
+  }, [lastOrder]); // Depend on lastOrder to ensure products load after auth
+
+  // Log out function
+  const handleLogout = () => {
+    localStorage.removeItem('motopol_phone');
+    setCustomer(null);
+    setLastOrder(null);
+    setCart([]);
+    setActiveTab('menu');
+    setAuthStep('login');
     if (orderChannel.current) {
       supabase.removeChannel(orderChannel.current);
       orderChannel.current = null;
     }
-    if (lastOrder && lastOrder.id) {
-      const ch = supabase
-        .channel(`order_track_${lastOrder.id}`)
-        .on('postgres_changes',
-          { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${lastOrder.id}` },
-          (payload) => setLastOrder(payload.new)
-        )
-        .subscribe();
-      orderChannel.current = ch;
-    }
-    return () => {
-      if (orderChannel.current) {
-        supabase.removeChannel(orderChannel.current);
-        orderChannel.current = null;
-ase.removeChannel(orderChannel.current);
-        orderChannel.current = null;
-      }
-    };
-  activeCategory === 'همه'
-    ? products
-    : products.filter(p => p.category === activeCategory);
-
-  const handleLogout = () => {
-    localStorage.removeItem('motopol_customer');
-    setCustomer(null);
-    setAuthStep('login');
-    setLastOrder(null);
-    setCart([]);
-    setActiveTab('menu');
   };
-
-  const currentStepIndex = lastOrder ? STEPS.findIndex(s => s.key === lastOrder.status) : -1;
 
   const inputStyle = {
     width: '100%', padding: '14px', borderRadius: '10px',
-    backgroundColor: '#1e293b', border: '1px solid #334155', color: '#fff'
+    backgroundColor: '#1e293b', border: '1px solid #334155', color: '#fff', marginBottom: '10px'
   };
+
+  const filteredProducts = activeCategory === 'همه'
+    ? products
+    : products.filter(p => p.category === activeCategory);
 
   return (
     <div className="motopol-container">
@@ -288,307 +308,345 @@ ase.removeChannel(orderChannel.current);
           border: none;
           border-radius: 12px;
           cursor: pointer;
+          padding: 12px 24px;
+          font-size: 16px;
+          transition: transform 0.2s;
+        }
+        .btn-gold:hover {
+          transform: translateY(-2px);
         }
         .card {
           background: #1e293b;
           border: 1px solid #334155;
           border-radius: 16px;
+          padding: 20px;
+          margin-bottom: 15px;
         }
-        .hide-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
-        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar {
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+        }
+        .hide-scrollbar::-webkit-scrollbar {
+          display: none;
+        }
+        input[type="text"], input[type="tel"] {
+            ${inputStyle}
+        }
+        button {
+            ${inputStyle}
+            padding: 14px 24px;
+            font-size: 16px;
+            text-align: center;
+            margin-top: 10px;
+        }
+        .tab-button {
+            padding: 10px 15px;
+            border: none;
+            background-color: transparent;
+            color: #94a3b8;
+            font-size: 16px;
+            cursor: pointer;
+            transition: color 0.3s, border-bottom 0.3s;
+            border-bottom: 2px solid transparent;
+        }
+        .tab-button.active {
+            color: #fff;
+            border-bottom: 2px solid #f59e0b;
+            font-weight: bold;
+        }
+        .product-card .buy-button {
+            background-color: #22c55e; /* Green */
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+        .product-card .buy-button:hover {
+            background-color: #16a34a;
+        }
+        .vip-price {
+            color: #eab308; /* Amber */
+            font-size: 14px;
+            text-decoration: line-through;
+            margin-left: 8px;
+        }
+        .cart-item-remove {
+             background-color: #ef4444; /* Red */
+             color: white;
+             border: none;
+             padding: 4px 8px;
+             border-radius: 6px;
+             cursor: pointer;
+             font-size: 12px;
+        }
       `}</style>
 
-      {authStep === 'login' && (
-        <div style={{ padding: '40px 24px', textAlign: 'center' }}>
-          <div style={{ fontSize: '3rem', marginBottom: '10px' }}>☕</div>
-          <h1 style={{ color: '#f59e0b', fontSize: '1.8rem', fontWeight: 800 }}>کافه موتوپل</h1>
-          <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginTop: '6px' }}>سفارش مستقیم و بی‌معطلی قهوه به محل کار شما</p>
-          <form onSubmit={handleLoginSubmit} style={{ marginTop: '36px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {(authStep === 'login' || authStep === 'checking') && (
+        <div className="flex flex-col items-center justify-center h-screen p-4">
+          <img src="/motopol-logo.png" alt="Motopol Logo" className="w-32 mb-6" />
+          <h1 className="text-2xl font-bold mb-2">موتوپل</h1>
+          <p className="text-gray-400 text-center mb-6">سفارش سریع قهوه</p>
+          <form onSubmit={handleLoginSubmit} className="w-full">
             <input
               type="tel"
-              placeholder="۰۹۱۲۳۴۵۶۷۸۹"
+              placeholder="شماره موبایل (مثال: 09121234567)"
               value={phoneInput}
               onChange={(e) => setPhoneInput(e.target.value)}
               required
-              style={{ ...inputStyle, fontSize: '1.2rem', textAlign: 'center', letterSpacing: '2px', padding: '16px' }}
+              style={inputStyle}
             />
-            <button type="submit" disabled={submitting} className="btn-gold" style={{ padding: '16px', fontSize: '1rem' }}>
+            <button type="submit" className="btn-gold w-full" disabled={submitting}>
               {submitting ? 'در حال بررسی...' : 'ورود و مشاهده منو 🚀'}
             </button>
           </form>
+          <p className="text-gray-400 mt-4">
+            حساب کاربری ندارید؟{' '}
+            <button onClick={() => setAuthStep('register')} className="text-amber-500 font-semibold">
+              ثبت‌نام کنید
+            </button>
+          </p>
         </div>
       )}
 
       {authStep === 'register' && (
-        <div style={{ padding: '28px 20px' }}>
-          <h2 style={{ color: '#f59e0b', fontSize: '1.4rem', marginBottom: '6px' }}>ثبت عضویت در موتوپل ✨</h2>
-          <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '24px' }}>فقط همین یک‌بار اطلاعات مغازه را وارد کنید.</p>
-          <form onSubmit={handleRegisterSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <div className="p-4 pt-12">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-bold">ثبت عضویت در موتوپل ✨</h2>
+            <button onClick={handleLogout} className="text-red-500 font-semibold">لغو</button>
+          </div>
+          <p className="text-gray-400 mb-6">فقط همین یک‌بار اطلاعات مغازه را وارد کنید.</p>
+          <form onSubmit={handleRegisterSubmit}>
             <input type="text" placeholder="نام و نام خانوادگی" value={regData.fullName} onChange={(e) => setRegData({ ...regData, fullName: e.target.value })} required style={inputStyle} />
+            <input type="tel" placeholder="شماره موبایل" value={regData.phone} onChange={(e) => setRegData({ ...regData, phone: e.target.value })} required style={inputStyle} />
             <input type="text" placeholder="نام مغازه / فروشگاه" value={regData.shopName} onChange={(e) => setRegData({ ...regData, shopName: e.target.value })} required style={inputStyle} />
             <input type="text" placeholder="آدرس دقیق" value={regData.shopAddress} onChange={(e) => setRegData({ ...regData, shopAddress: e.target.value })} required style={inputStyle} />
             <input type="text" placeholder="توضیحات تحویل (اختیاری)" value={regData.addressNotes} onChange={(e) => setRegData({ ...regData, addressNotes: e.target.value })} style={inputStyle} />
-            <button type="submit" disabled={submitting} className="btn-gold" style={{ padding: '16px', fontSize: '1rem' }}>
-              {submitting ? 'در حال ثبت...' : 'ثبت و شروع سفارش ☕'}
+            <button type="submit" className="btn-gold w-full" disabled={submitting}>
+              {submitting ? 'در حال ثبت...' : 'ثبت و شروع'}
             </button>
           </form>
         </div>
       )}
 
       {authStep === 'app' && customer && (
-        <>
-          <header style={{ padding: '16px 20px', backgroundColor: '#161f30', borderBottom: '1px solid #22314d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '1.1rem', fontWeight: 800 }}>سلام {(customer.full_name || '').split(' ')[0]} 👋</span>
-                {customer.is_vip && <span style={{ backgroundColor: '#f59e0b', color: '#000', fontSize: '0.7rem', padding: '2px 8px', borderRadius: '10px', fontWeight: 800 }}>VIP</span>}
-              </div>
-              <p style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '2px' }}>
-                تحویل به: <strong style={{ color: '#cbd5e1' }}>{customer.shop_name}</strong>
-              </p>
+        <div>
+          <div className="sticky top-0 bg-[#0f172a] z-10 p-4 flex items-center justify-between border-b border-gray-700">
+             <button onClick={handleLogout} className="text-red-500 font-semibold">خروج</button>
+            <div className="flex items-center space-x-4">
+              <button onClick={() => setActiveTab('menu')} className={`tab-button ${activeTab === 'menu' ? 'active' : ''}`}>منو</button>
+              <button onClick={() => setActiveTab('cart')} className={`tab-button ${activeTab === 'cart' ? 'active' : ''}`}>سبد خرید ({cart.length})</button>
+              <button onClick={() => setActiveTab('track')} className={`tab-button ${activeTab === 'track' ? 'active' : ''}`}>پیگیری</button>
+              <button onClick={() => setActiveTab('profile')} className={`tab-button ${activeTab === 'profile' ? 'active' : ''}`}>پروفایل</button>
             </div>
-            <div style={{ textAlign: 'left' }}>
-              <div style={{ fontSize: '0.85rem', color: '#f59e0b', fontWeight: 700 }}>کافه موتوپل</div>
-            </div>
-          </header>
+          </div>
 
-          {activeTab === 'menu' && (
-            <div style={{ padding: '16px' }}>
-              <div className="hide-scrollbar" style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '10px', marginBottom: '14px' }}>
-                {categories.map((cat) => (
-                  <button
-                    key={cat}
-                    onClick={() => setActiveCategory(cat)}
-                    style={{
-                      padding: '8px 16px', borderRadius: '20px', border: 'none', whiteSpace: 'nowrap',
-                      fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer',
-                      backgroundColor: activeCategory === cat ? '#f59e0b' : '#1e293b',
-                      color: activeCategory === cat ? '#0f172a' : '#94a3b8'
-                    }}
-                  >
-                    {cat}
-                  </button>
-                ))}
-              </div>
-
-              {loadingMenu ? (
-                <p style={{ textAlign: 'center', color: '#64748b', padding: '40px 0' }}>در حال آماده‌سازی منو...</p>
-              ) : filteredProducts.length === 0 ? (
-                <p style={{ textAlign: 'center', color: '#64748b', padding: '40px 0' }}>محصولی در این دسته یافت نشد.</p>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {filteredProducts.map((p) => {
-                    const price = getProductPrice(p);
-                    const isVipPrice = customer.is_vip && p.vip_price;
-                    const countInCart = (cart.find(i => i.id === p.id) || {}).quantity || 0;
-                    return (
-                      <div key={p.id} className="card" style={{ padding: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div>
-                          <h3 style={{ fontSize: '1rem', marginBottom: '4px' }}>{p.name}</h3>
-                          {p.description && <p style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '8px' }}>{p.description}</p>}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span style={{ fontSize: '1.05rem', fontWeight: 800, color: isVipPrice ? '#f59e0b' : '#f8fafc' }}>
-                              {price.toLocaleString('fa-IR')}
-                            </span>
-                            <span style={{ fontSize: '0.75rem', color: '#64748b' }}>تومان</span>
-                            {isVipPrice && (
-                              <span style={{ textDecoration: 'line-through', color: '#64748b', fontSize: '0.8rem' }}>
-                                {Number(p.base_price).toLocaleString('fa-IR')}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div>
-                          {countInCart === 0 ? (
-                            <button onClick={() => addToCart(p)} style={{ backgroundColor: '#1e293b', border: '1px solid #f59e0b', color: '#f59e0b', padding: '8px 16px', borderRadius: '8px', fontWeight: 700, cursor: 'pointer' }}>
-                              + افزودن
-                            </button>
-                          ) : (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#0f172a', padding: '4px 8px', borderRadius: '8px', border: '1px solid #334155' }}>
-                              <button onClick={() => removeFromCart(p.id)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '1.2rem', cursor: 'pointer', fontWeight: 900 }}>-</button>
-                              <span style={{ fontWeight: 800, minWidth: '18px', textAlign: 'center' }}>{countInCart}</span>
-                              <button onClick={() => addToCart(p)} style={{ background: 'none', border: 'none', color: '#10b981', fontSize: '1.2rem', cursor: 'pointer', fontWeight: 900 }}>+</button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+          <div className="p-4">
+            {activeTab === 'menu' && (
+              <div>
+                <div className="flex space-x-2 mb-4 overflow-x-auto hide-scrollbar">
+                  {categories.map((cat) => (
+                    <button
+                      key={cat}
+                      onClick={() => setActiveCategory(cat)}
+                      className={`tab-button ${activeCategory === cat ? 'active' : ''} flex-shrink-0`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
                 </div>
-              )}
-            </div>
-          )}
 
-          {activeTab === 'cart' && (
-            <div style={{ padding: '16px' }}>
-              <h2 style={{ fontSize: '1.2rem', color: '#f59e0b', marginBottom: '16px' }}>خلاصه سفارش</h2>
-              {cart.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '50px 0', color: '#64748b' }}>سبد شما خالی است ☕</div>
-              ) : (
-                <>
-                  <div className="card" style={{ padding: '16px', marginBottom: '16px' }}>
-                    {cart.map((item) => (
-                      <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #334155' }}>
-                        <div>
-                          <div style={{ fontWeight: 700 }}>{item.name}</div>
-                          <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-                            {item.quantity} × {item.final_price.toLocaleString('fa-IR')} ت
-                          </div>
-                        </div>
-                        <div style={{ fontWeight: 800, color: '#f59e0b' }}>
-                          {(item.quantity * item.final_price).toLocaleString('fa-IR')} تومان
-                        </div>
-                      </div>
-                    ))}
-                    <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#94a3b8' }}>
-                      <span>هزینه ارسال:</span>
-                      <span style={{ color: isFreeDelivery ? '#10b981' : '#f8fafc' }}>
-                        {isFreeDelivery ? 'رایگان (۲+ آیتم) 🎉' : '۱۵,۰۰۰ تومان'}
-                      </span>
-                    </div>
-                    <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px dashed #475569', display: 'flex', justifyContent: 'space-between', fontSize: '1.1rem', fontWeight: 800 }}>
-                      <span>مبلغ قابل پرداخت:</span>
-                      <span style={{ color: '#f59e0b' }}>{grandTotal.toLocaleString('fa-IR')} تومان</span>
-                    </div>
+                {loadingMenu ? (
+                  <div className="flex justify-center items-center h-64">
+                    <p>در حال آماده‌سازی منو...</p>
                   </div>
-                  <button onClick={handleFinalOrder} disabled={submitting} className="btn-gold" style={{ width: '100%', padding: '16px', fontSize: '1.1rem' }}>
-                    {submitting ? 'در حال ارسال به باریستا...' : 'ثبت نهایی سفارش 🚀'}
-                  </button>
-                </>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'track' && (
-            <div style={{ padding: '16px' }}>
-              {!lastOrder ? (
-                <div style={{ textAlign: 'center', padding: '50px 0', color: '#64748b' }}>
-                  فعلاً سفارش فعالی ندارید ☕
-                </div>
-              ) : (
-                <div className="card" style={{ padding: '20px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                    <h2 style={{ fontSize: '1.1rem', color: '#f59e0b' }}>پیگیری سفارش</h2>
-                    <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                      #{String(lastOrder.id).slice(0, 8)}
-                    </span>
+                ) : filteredProducts.length === 0 ? (
+                  <div className="text-center py-10 text-gray-500">
+                    محصولی در این دسته یافت نشد.
                   </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0px' }}>
-                    {STEPS.map((step, idx) => {
-                      const done = idx <= currentStepIndex;
-                      const isCurrent = idx === currentStepIndex;
+                ) : (
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    {filteredProducts.map((p) => {
+                      const countInCart = cart.find(item => item.id === p.id)?.quantity || 0;
+                      const isVipPrice = customer?.is_vip && p.vip_price;
                       return (
-                        <div key={step.key} style={{ display: 'flex', gap: '12px' }}>
-                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                            <div style={{
-                              width: '36px', height:36px', height: '36px', borderRadius: '50%',
-                              display: 'center', justifyContent: 'center',
-                              backgroundColor: done ? '#f59e0b' : '#0f172a',
-                              border: isCurrent ? '2px solid #fbbf24' : '2px solid #334155',
-                              fontSize: '1rem', flexShrink: 0
-                            }}>
-                              {step.icon}
+                        <div key={p.id} className="card product-card">
+                          <h3 className="text-lg font-semibold mb-1">{p.name}</h3>
+                          {p.description && <p className="text-gray-400 text-sm mb-2">{p.description}</p>}
+                          <div className="flex items-center justify-between mt-3">
+                            <div>
+                              {isVipPrice && (
+                                <span className="vip-price">
+                                  {Number(p.price).toLocaleString('fa-IR')} ت
+                                </span>
+                              )}
+                              <span className="text-lg font-bold">
+                                {(isVipPrice ? p.vip_price : p.price).toLocaleString('fa-IR')} ت
+                              </span>
                             </div>
-                            {idx < STEPS.length - 1 && (
-                              <div style={{
-                                width: '2px', height: '36px',
-                                backgroundColor: idx < currentStepIndex ? '#f59e0b' : '#334155'
-                              }} />
-                            )}
-                          </div>
-                          <div style={{ paddingBottom: '20px' }}>
-                            <div style={{
-                              fontWeight: 700, fontSize: '0.95rem',
-                              color: done ? '#f8fafc' : '#64748b'
-                            }}>
-                              {step.label}
-                            </div>
-                            {isCurrent && (
-                              <div style={{ fontSize: '0.75rem', color: '#f59e0b', marginTop: '2px' }}>
-                                در حال انجام...
-                              </div>
-                            )}
+                            <button onClick={() => addToCart(p)} className="buy-button">
+                              {countInCart === 0 ? 'افزودن' : `${countInCart} عدد`}
+                            </button>
                           </div>
                         </div>
                       );
                     })}
                   </div>
+                )}
+              </div>
+            )}
 
-                  <div style={{ backgroundColor: '#0f172a', borderRadius: '12px', padding: '12px', marginTop: '8px' }}>
-                    <div style={{ color: '#8b949e', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>6px', fontWeight: 'bold' }}>اقلام سفارش:</div>
-                   Order.items.map((it, i) => (
-                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', color: '#c9d1d9', padding: '3px 0', fontSize: '0.85rem' }}>
-                        <span>{it.name}</span>
-                        <span>×{it.quantity}</span>
+            {activeTab === 'cart' && (
+              <div>
+                <h2 className="text-2xl font-bold mb-4">سبد خرید</h2>
+                {cart.length === 0 ? (
+                  <p className="text-center py-10 text-gray-500">سبد شما خالی است ☕</p>
+                ) : (
+                  <div>
+                    {cart.map((item) => (
+                      <div key={item.id} className="card flex items-center justify-between mb-3">
+                        <div>
+                          <h3 className="font-semibold">{item.name}</h3>
+                          <p className="text-sm text-gray-400">
+                            {item.quantity} × {item.price.toLocaleString('fa-IR')} ت
+                          </p>
+                        </div>
+                        <div className="flex items-center">
+                          <button
+                            onClick={() => updateCartQuantity(item.id, item.quantity - 1)}
+                            className="bg-red-600 text-white px-2 py-1 rounded mr-2"
+                          >
+                            -
+                          </button>
+                          <span className="font-bold mx-2">{item.quantity}</span>
+                          <button
+                            onClick={() => updateCartQuantity(item.id, item.quantity + 1)}
+                            className="bg-green-600 text-white px-2 py-1 rounded mr-2"
+                          >
+                            +
+                          </button>
+                           <button
+                            onClick={() => updateCartQuantity(item.id, 0)} // Remove item
+                            className="cart-item-remove"
+                           >
+                            حذف
+                           </button>
+                        </div>
                       </div>
                     ))}
-                    {lastOrder.total_price != null && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', color: '#f59e0b', fontWeight: 800, marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #21262d' }}>
-                        <span>مبلغ کل</span>
-                        <span>{Number(lastOrder.total_price).toLocaleString('fa-IR')} تومان</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'profile' && (
-            <div style={{ padding: '16px' }}>
-              <div className="card" style={{ padding: '20px', textAlign: 'center', marginBottom: '16px' }}>
-                <div style={{ fontSize: '2.5rem' }}>👑</div>
-                <h2 style={{ fontSize: '1.2rem', marginTop: '8px' }}>{customer.full_name}</h2>
-                <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>{customer.shop_name} - {customer.phone}</p>
-                <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'space-around', backgroundColor: '#0f172a', padding: '12px', borderRadius: '12px' }}>
-                  <div>
-                    <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>سفارش‌ها</div>
-                    <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#f59e0b' }}>{customer.order_count || 0}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>مجموع خرید</div>
-                    <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#10b981' }}>
-                      {Number(customer.total_spent || 0).toLocaleString('fa-IR')} ت
+                    <div className="mt-6 p-4 card">
+                      <p className="flex justify-between mb-2">
+                        <span>هزینه ارسال:</span>
+                        <span>{isFreeDelivery ? 'رایگان (۲+ آیتم) 🎉' : deliveryFee.toLocaleString('fa-IR') + ' تومان'}</span>
+                      </p>
+                      <p className="flex justify-between font-bold text-lg mt-3 pt-3 border-t border-gray-700">
+                        <span>مبلغ قابل پرداخت:</span>
+                        <span>{grandTotal.toLocaleString('fa-IR')} تومان</span>
+                      </p>
+                      <button onClick={handlePlaceOrder} className="btn-gold w-full mt-4" disabled={submitting}>
+                        {submitting ? 'در حال ثبت سفارش...' : 'ثبت سفارش نهایی'}
+                      </button>
                     </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'track' && (
+              <div>
+                <h2 className="text-2xl font-bold mb-4">پیگیری سفارش</h2>
+                {!lastOrder ? (
+                  <p className="text-center py-10 text-gray-500">فعلاً سفارش فعالی ندارید ☕</p>
+                ) : (
+                  <div className="card">
+                    <div className="flex justify-between items-center mb-4">
+                      <p className="text-lg font-semibold">سفارش #{String(lastOrder.id).slice(0, 8)}</p>
+                      <p className={`font-bold ${lastOrder.status === 'delivered' ? 'text-green-500' : lastOrder.status === 'cancelled' ? 'text-red-500' : 'text-amber-500'}`}>
+                        {STEPS.find(s => s.key === lastOrder.status)?.label || 'وضعیت نامشخص'}
+                      </p>
+                    </div>
+                    <div className="flex justify-between items-center mb-4">
+                      <p>تاریخ: {new Date(lastOrder.created_at).toLocaleString('fa-IR', { hour: '2-digit', minute: '2-digit', hour12: false })}</p>
+                      <p>هزینه ارسال: {lastOrder.delivery_fee ? lastOrder.delivery_fee.toLocaleString('fa-IR') + ' تومان' : 'رایگان'}</p>
+                    </div>
+
+                    <div className="relative">
+                      <div className="flex justify-between items-center mb-1">
+                        {STEPS.map((step, idx) => {
+                          const isCompleted = ['delivered', 'cancelled'].includes(lastOrder.status) ? step.key === lastOrder.status || STEPS.findIndex(s => s.key === lastOrder.status) > idx : step.key === lastOrder.status;
+                          const isCurrent = step.key === lastOrder.status;
+                          const isFuture = STEPS.findIndex(s => s.key === lastOrder.status) < idx;
+                          const isDeliveredOrCancelled = ['delivered', 'cancelled'].includes(lastOrder.status);
+
+                          return (
+                            <div key={step.key} className={`flex flex-col items-center relative ${isFuture ? 'opacity-50' : ''}`}>
+                              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-xl mb-1 transition-all duration-500 ${isDeliveredOrCancelled ? (step.key === lastOrder.status ? 'bg-green-500' : (lastOrder.status === 'delivered' && STEPS.findIndex(s => s.key === lastOrder.status) > idx ? 'bg-green-500' : 'bg-red-500')) : (isCurrent ? 'bg-amber-500 animate-pulse' : (isCompleted ? 'bg-green-500' : 'bg-gray-700'))}`}>
+                                {step.icon}
+                              </div>
+                              <p className={`text-xs w-20 text-center ${isDeliveredOrCancelled ? (step.key === lastOrder.status ? 'text-green-500' : (lastOrder.status === 'delivered' && STEPS.findIndex(s => s.key === lastOrder.status) > idx ? 'text-green-500' : 'text-red-500')) : (isCurrent ? 'text-amber-500' : (isCompleted ? 'text-green-500' : 'text-gray-500'))}`}>
+                                {step.label}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {/* Progress Line */}
+                      <div className="absolute top-1/2 left-0 right-0 h-1 -translate-y-1/2 bg-gray-700 -z-10" style={{ marginTop: '6px' }}>
+                        <div
+                          className="h-full bg-green-500 transition-all duration-500"
+                          style={{
+                            width: `${Math.max(0, STEPS.findIndex(s => s.key === lastOrder.status) + (lastOrder.status === 'delivered' ? 1 : 0)) / (STEPS.length -1) * 100}%`,
+                            backgroundColor: lastOrder.status === 'cancelled' ? '#ef4444' : '#16a34a' // Red if cancelled, Green otherwise
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <p className="text-sm text-gray-400 mt-6">اقلام سفارش:</p>
+                    {lastOrder.items.map((it, i) => (
+                      <div key={i} className="flex justify-between items-center text-sm py-1">
+                        <span>{it.name}</span>
+                        <span>{it.quantity} × {it.price.toLocaleString('fa-IR')} ت</span>
+                      </div>
+                    ))}
+                    <p className="flex justify-between font-bold mt-3 pt-3 border-t border-gray-700">
+                      <span>مبلغ کل:</span>
+                      <span>{Number(lastOrder.total_price).toLocaleString('fa-IR')} تومان</span>
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'profile' && (
+              <div className="card">
+                <h2 className="text-2xl font-bold mb-4">پروفایل</h2>
+                <p className="text-lg font-semibold">{customer.full_name}</p>
+                <p className="text-gray-400 mb-2">{customer.shop_name}</p>
+                <p className="text-gray-400 mb-4">{customer.phone}</p>
+                <div className="grid grid-cols-2 gap-4 text-center">
+                  <div>
+                    <p className="text-sm text-gray-400">تعداد سفارش‌ها</p>
+                    <p className="font-bold text-xl">{customer.order_count | 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-400">مجموع خرید</p>
+                    <p className="font-bold text-xl">{Number(customer.total_spent | 0).toLocaleString('fa-IR')} ت</p>
                   </div>
                 </div>
               </div>
-              <button onClick={handleLogout} style={{ width: '100%', padding: '12px', background: 'none', border: '1px solid #ef4444', color: '#ef4444', borderRadius: '10px', cursor: 'pointer' }}>
-                خروج از حساب
-              </button>
-            </div>
-          )}
+            )}
+          </div>
 
-          <nav style={{
-            position: 'fixed', bottom: 0, left: 0, right: 0, maxWidth: '500px', margin: '0 auto',
-            backgroundColor: '#161f30', borderTop: '1px solid #22314d', display: 'flex',
-            justifyContent: 'space-around', padding: '10px 0', zIndex: 100
-          }}>
-            <button onClick={() => setActiveTab('menu')} style={{ background: 'none', border: 'none', color: activeTab === 'menu' ? '#f59e0b' : '#64748b', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '0.8rem', gap: '4px' }}>
-              <span style={{ fontSize: '1.3rem' }}>☕</span> منو
+          <div className="sticky bottom-0 bg-[#0f172a] z-10 p-4 border-t border-gray-700 flex justify-center">
+            <button onClick={handlePlaceOrder} className="btn-gold" disabled={submitting || cart.length === 0}>
+              {submitting ? 'در حال پردازش...' : `ثبت سفارش (${grandTotal.toLocaleString('fa-IR')} تومان)`}
             </button>
-            <button onClick={() => setActiveTab('cart')} style={{ position: 'relative', background: 'none', border: 'none', color: activeTab === 'cart' ? '#f59e0b' : '#64748b', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '0.8rem', gap: '4px' }}>
-              <span style={{ fontSize: '1.3rem' }}>🛒</span> سبد
-              {totalItemsCount > 0 && (
-                <span style={{ position: 'absolute', top: '-4px', right: '10px', backgroundColor: '#f59e0b', color: '#000', borderRadius: '10px', padding: '1px 6px', fontSize: '0.7rem', fontWeight: 800 }}>{totalItemsCount}</span>
-              )}
-            </button>
-            <button onClick={() => setActiveTab('track')} style={{ position: 'relative', background: 'none', border: 'none', color: activeTab === 'track' ? '#f59e0b' : '#64748b', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '0.8rem', gap: '4px' }}>
-              <span style={{ fontSize: '1.3rem' }}>🛵</span> پیگیری
-              {lastOrder && !['delivered', 'cancelled', 'completed'].includes(lastOrder.status) && (
-                <span style={{ position: 'absolute', top: '-2px', left: '14px', width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }} />
-              )}
-            </button>
-            <button onClick={() => setActiveTab('profile')} style={{ background: 'none', border: 'none', color: activeTab === 'profile' ? '#f59e0b' : '#64748b', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '0.8rem', gap: '4px' }}>
-              <span style={{ fontSize: '1.3rem' }}>👤</span> پروفایل
-            </button>
-          </nav>
-        </>
-      )}
-
-      {authStep === 'checking' && (
-        <div style={{ textAlign: 'center', padding: '100px 0', color: '#64748b' }}>در حال بارگذاری...</div>
+          </div>
+        </div>
       )}
     </div>
   );
