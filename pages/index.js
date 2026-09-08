@@ -1,9 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Head from 'next/head';
-import { supabase } from '../lib/supabase';
-
-const STEPS = [
-  { key: 'pending', label: 'ثبت سفارش', icon: '📝' },
+import { supabase } from '../lib/supabimport Head from 'next/head';
+import { supabase } from '../lib/supab سفارش', icon: '📝' },
   { key: 'processing', label: 'آماده‌سازی', icon: '☕' },
   { key: 'out_for_delivery', label: 'پیک در مسیر', icon: '🛵' },
   { key: 'delivered', label: 'تحویل شد', icon: '✅' }
@@ -13,9 +11,7 @@ export default function MotopolApp() {
   const [customer, setCustomer] = useState(null);
   const [phoneInput, setPhoneInput] = useState('');
   const [authStep, setAuthStep] = useState('checking');
-  const [regData, setRegData] = useState({
-    fullName: '', phone: '', shopName: '', shopAddress: '', addressNotes: ''
-  });
+  const [regData, setRegData] = useState({ fullName: '', phone: '', shopName: '', shopAddress: '', addressNotes: '' });
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [activeCategory, setActiveCategory] = useState('همه');
@@ -26,9 +22,7 @@ export default function MotopolApp() {
   const [submitting, setSubmitting] = useState(false);
   const orderChannel = useRef(null);
 
-  useEffect(() => {
-    initializeApp();
-  }, []);
+  useEffect(() => { initializeApp(); }, []);
 
   async function initializeApp() {
     const storedPhone = localStorage.getItem('motopol_phone');
@@ -43,66 +37,61 @@ export default function MotopolApp() {
   async function checkCustomer(phone) {
     setAuthStep('checking');
     try {
-      const { data, error } = await supabase.from('customers').select('*').eq('phone', phone).single();
+      const { data, error } = await supabase.from('customers').select('*').eq('phone', phone).maybeSingle();
       if (data) {
         setCustomer(data);
         setAuthStep('app');
-        await fetchLastOrder(phone);
         localStorage.setItem('motopol_phone', phone);
+        await fetchLastOrder(phone);
+        await fetchProducts();
       } else {
         setAuthStep('register');
+        if (phone) setRegData(prev => ({ ...prev, phone }));
       }
-      if (error) throw error;
+      if (error && error.code !== 'PGRST116') throw error;
     } catch (e) {
-      console.error("Error checking customer:", e);
-      setAuthStep('login');
-    }
-  }
-
-  async function refreshCustomerData(phone) {
-    try {
-      const { data, error } = await supabase.from('customers').select('*').eq('phone', phone).single();
-      if (error) throw error;
-      setCustomer(data);
-      setAuthStep('app');
-      await fetchLastOrder(phone);
-    } catch (e) {
-      console.error("Error refreshing customer data:", e);
+      console.error('Error checking customer:', e);
       setAuthStep('login');
     }
   }
 
   async function fetchLastOrder(phone) {
     try {
-      const { data, error } = await supabase.from('orders').select('*')
+      let { data } = await supabase.from('orders').select('*')
         .eq('phone', phone)
         .in('status', ['pending', 'processing', 'out_for_delivery'])
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
-      if (error) throw error;
-      setLastOrder(data);
+
+      if (!data) {
+        const res = await supabase.from('orders').select('*')
+          .eq('phone', phone)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        data = res.data;
+      }
       if (data) {
-        setActiveTab('track');
+        setLastOrder(data);
         subscribeToOrderUpdates(data.id);
       } else {
         setLastOrder(null);
       }
     } catch (err) {
-      console.error("Error fetching last order:", err);
+      console.error('Error fetching last order:', err);
     }
   }
 
   async function fetchProducts() {
     setLoadingMenu(true);
     try {
-      const { data, error } = await supabase.from('products').select('*').eq('is_active', true)
-        .order('created_at', { ascending: true });
+      const { data, error } = await supabase.from('products').select('*').eq('is_active', true).order('created_at', { ascending: true });
       if (error) throw error;
-      setProducts(data);
-      setCategories(['همه', ...new Set(data.map(p => p.category).filter(Boolean))]);
+      setProducts(data || []);
+      setCategories(['همه', ...new Set((data || []).map(p => p.category).filter(Boolean))]);
     } catch (err) {
-      console.error("Error fetching products:", err);
+      console.error('Error fetching products:', err);
     } finally {
       setLoadingMenu(false);
     }
@@ -110,18 +99,8 @@ export default function MotopolApp() {
 
   const handleLoginSubmit = async (e) => {
     e.preventDefault();
-    if (!phoneInput.trim()) {
-      alert('لطفاً شماره موبایل معتبر وارد کنید.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await checkCustomer(phoneInput.trim());
-    } catch (e) {
-      alert('خطا در ورود: ' + e.message);
-    } finally {
-      setSubmitting(false);
-    }
+    if (!phoneInput.trim()) { alert('لطفاً شماره موبایل معتبر وارد کنید.'); return; }
+    await checkCustomer(phoneInput.trim());
   };
 
   const handleRegisterSubmit = async (e) => {
@@ -132,14 +111,9 @@ export default function MotopolApp() {
     }
     setSubmitting(true);
     try {
-      const { data: existingCustomer, error: checkError } = await supabase.from('customers').select('*').eq('phone', regData.phone).single();
-      if (checkError) throw checkError;
-
-      if (existingCustomer) {
-        setCustomer(existingCustomer);
-        setAuthStep('app');
-        await fetchLastOrder(regData.phone);
-        localStorage.setItem('motopol_phone', regData.phone);
+      const { data: existing } = await supabase.from('customers').select('*').eq('phone', regData.phone).maybeSingle();
+      if (existing) {
+        setCustomer(existing);
       } else {
         const { data, error } = await supabase.from('customers').insert([{
           phone: regData.phone,
@@ -153,10 +127,11 @@ export default function MotopolApp() {
         }]).select().single();
         if (error) throw error;
         setCustomer(data);
-        setAuthStep('app');
-        await fetchLastOrder(data.phone);
-        localStorage.setItem('motopol_phone', data.phone);
       }
+      setAuthStep('app');
+      localStorage.setItem('motopol_phone', regData.phone);
+      await fetchLastOrder(regData.phone);
+      await fetchProducts();
     } catch (e) {
       alert('خطا در ثبت‌نام: ' + e.message);
     } finally {
@@ -165,39 +140,30 @@ export default function MotopolApp() {
   };
 
   const addToCart = (product) => {
-    setCart(prevCart => {
-      const existingItemIndex = prevCart.findIndex(item => item.id === product.id);
-      if (existingItemIndex > -1) {
-        const newCart = [...prevCart];
-        newCart[existingItemIndex].quantity += 1;
-        return newCart;
-      } else {
-        return [...prevCart, { ...product, quantity: 1, final_price: product.price }];
+    setCart(prev => {
+      const idx = prev.findIndex(item => item.id === product.id);
+      if (idx > -1) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], quantity: next[idx].quantity + 1 };
+        return next;
       }
+      return [...prev, { ...product, quantity: 1 }];
     });
   };
 
   const updateCartQuantity = (productId, quantity) => {
-    setCart(prevCart => {
-      if (quantity <= 0) {
-        return prevCart.filter(item => item.id !== productId);
-      }
-      return prevCart.map(item =>
-        item.id === productId ? { ...item, quantity: quantity, final_price: item.price * quantity } : item
-      );
-    });
+    setCart(prev => quantity <= 0
+      ? prev.filter(item => item.id !== productId)
+      : prev.map(item => item.id === productId ? { ...item, quantity } : item)
+    );
   };
 
-  const grandTotal = cart.reduce((total, item) => total + item.final_price, 0);
+  const grandTotal = cart.reduce((t, i) => t + i.price * i.quantity, 0);
   const isFreeDelivery = cart.length >= 2;
   const deliveryFee = isFreeDelivery ? 0 : 15000;
 
   const handlePlaceOrder = async () => {
-    if (!customer) return;
-    if (cart.length === 0) {
-      alert('سبد خرید شما خالی است.');
-      return;
-    }
+    if (!customer || cart.length === 0) { alert('سبد خرید شما خالی است.'); return; }
     setSubmitting(true);
     try {
       const { data, error } = await supabase.from('orders').insert([{
@@ -206,24 +172,22 @@ export default function MotopolApp() {
         shop_name: customer.shop_name,
         phone: customer.phone,
         shop_address: customer.shop_address + (customer.address_notes ? ` (${customer.address_notes})` : ''),
-        items: cart.map(({ final_price, ...rest }) => rest), // Save base product info without final_price
+        items: cart.map(item => ({ id: item.id, name: item.name, price: item.price, quantity: item.quantity })),
         total_price: grandTotal,
         delivery_fee: deliveryFee,
         status: 'pending'
       }]).select().single();
-
       if (error) throw error;
 
       await supabase.from('customers').update({
-        order_count: (customer.order_count | 0) + 1,
-        total_spent: Number(customer.total_spent | 0) + grandTotal
+        order_count: (customer.order_count || 0) + 1,
+        total_spent: Number(customer.total_spent || 0) + grandTotal
       }).eq('id', customer.id);
 
       setLastOrder(data);
       setCart([]);
       setActiveTab('track');
       subscribeToOrderUpdates(data.id);
-
     } catch (e) {
       alert('خطا در ثبت سفارش: ' + e.message);
     } finally {
@@ -232,30 +196,15 @@ export default function MotopolApp() {
   };
 
   const subscribeToOrderUpdates = (orderId) => {
-    if (orderChannel.current) {
-      supabase.removeChannel(orderChannel.current);
-    }
+    if (orderChannel.current) supabase.removeChannel(orderChannel.current);
     orderChannel.current = supabase.channel(`order_track_${orderId}`)
       .on('postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${orderId}` },
-        (payload) => {
-          setLastOrder(payload.new);
-          if (payload.new.status === 'delivered') {
-            // Optionally unsubscribe after delivery
-            // supabase.removeChannel(orderChannel.current);
-          }
-        }
+        (payload) => setLastOrder(payload.new)
       )
       .subscribe();
   };
 
-  useEffect(() => {
-    if (lastOrder) {
-      fetchProducts(); // Fetch products once when app loads if lastOrder exists (user is logged in)
-    }
-  }, [lastOrder]); // Depend on lastOrder to ensure products load after auth
-
-  // Log out function
   const handleLogout = () => {
     localStorage.removeItem('motopol_phone');
     setCustomer(null);
@@ -269,17 +218,11 @@ export default function MotopolApp() {
     }
   };
 
-  const inputStyle = {
-    width: '100%', padding: '14px', borderRadius: '10px',
-    backgroundColor: '#1e293b', border: '1px solid #334155', color: '#fff', marginBottom: '10px'
-  };
-
-  const filteredProducts = activeCategory === 'همه'
-    ? products
-    : products.filter(p => p.category === activeCategory);
+  const filteredProducts = activeCategory === 'همه' ? products : products.filter(p => p.category === activeCategory);
+  const currentStepIdx = lastOrder ? STEPS.findIndex(s => s.key === lastOrder.status) : -1;
 
   return (
-    <div className="motopol-container">
+    <div className="app">
       <Head>
         <title>موتوپل | سفارش سریع قهوه</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" />
@@ -290,143 +233,195 @@ export default function MotopolApp() {
         body {
           background-color: #0b0f19;
           color: #f8fafc;
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Vazirmatn, sans-serif;
+          font-family: Vazirmatn, -apple-system, "Segoe UI", Tahoma, sans-serif;
           direction: rtl;
         }
-        .motopol-container {
+        input, button, textarea { font-family: inherit; }
+      `}</style>
+
+      <style jsx>{`
+        .app {
           min-height: 100vh;
           max-width: 500px;
           margin: 0 auto;
           background-color: #0f172a;
-          position: relative;
-          padding-bottom: 80px;
+          padding-bottom: 30px;
         }
+        .center-screen {
+          min-height: 100vh;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          text-align: center;
+          padding: 20px;
+        }
+        .brand-title { font-size: 28px; font-weight: 800; color: #f59e0b; margin-bottom: 8px; }
+        .brand-sub { color: #94a3b8; margin-bottom: 24px; font-size: 15px; }
+        .auth-form { width: 100%; max-width: 340px; }
+        .input {
+          width: 100%;
+          padding: 14px;
+          border-radius: 10px;
+          background-color: #1e293b;
+          border: 1px solid #334155;
+          color: #fff;
+          font-size: 15px;
+          margin-bottom: 10px;
+          outline: none;
+        }
+        .input:focus { border-color: #f59e0b; }
         .btn-gold {
+          width: 100%;
           background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
           color: #0f172a;
           font-weight: 700;
           border: none;
           border-radius: 12px;
           cursor: pointer;
-          padding: 12px 24px;
+          padding: 14px;
           font-size: 16px;
-          transition: transform 0.2s;
+          margin-top: 6px;
         }
-        .btn-gold:hover {
-          transform: translateY(-2px);
+        .btn-gold:disabled { opacity: 0.6; cursor: not-allowed; }
+        .auth-switch { color: #94a3b8; margin-top: 20px; font-size: 14px; }
+        .auth-switch button { color: #f59e0b; font-weight: 600; background: none; border: none; cursor: pointer; text-decoration: underline; font-size: 14px; }
+        .page { padding: 16px; padding-top: 24px; }
+        .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+        .page-title { font-size: 20px; font-weight: 700; }
+        .cancel-link { color: #f87171; background: none; border: none; font-size: 13px; cursor: pointer; }
+        .topbar {
+          position: sticky; top: 0; z-index: 10;
+          background-color: #0f172a;
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 10px 14px;
+          border-bottom: 1px solid #1e293b;
         }
+        .tabs { display: flex; gap: 4px; }
+        .tab-btn {
+          padding: 8px 12px;
+          background: none; border: none;
+          color: #94a3b8; font-size: 15px; cursor: pointer;
+          border-bottom: 2px solid transparent;
+        }
+        .tab-btn.active { color: #f59e0b; border-bottom-color: #f59e0b; font-weight: 700; }
+        .logout-btn { color: #f87171; background: none; border: none; font-size: 12px; cursor: pointer; }
+        .chips { display: flex; gap: 8px; overflow-x: auto; margin-bottom: 16px; padding-bottom: 4px; }
+        .chips::-webkit-scrollbar { display: none; }
+        .chip {
+          flex-shrink: 0;
+          padding: 8px 16px;
+          border-radius: 999px;
+          background: #1e293b;
+          border: 1px solid #334155;
+          color: #94a3b8;
+          font-size: 14px;
+          cursor: pointer;
+        }
+        .chip.active { background: #f59e0b; color: #0f172a; border-color: #f59e0b; font-weight: 700; }
         .card {
           background: #1e293b;
           border: 1px solid #334155;
           border-radius: 16px;
-          padding: 20px;
-          margin-bottom: 15px;
+          padding: 16px;
+          margin-bottom: 12px;
         }
-        .hide-scrollbar {
-          scrollbar-width: none;
-          -ms-overflow-style: none;
+        .product-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+        .product-name { font-weight: 700; font-size: 16px; margin-bottom: 4px; }
+        .product-desc { color: #94a3b8; font-size: 12px; margin-bottom: 8px; }
+        .product-price { color: #fbbf24; font-weight: 700; font-size: 14px; }
+        .buy-btn {
+          background: #22c55e; color: #fff;
+          border: none; padding: 10px 16px;
+          border-radius: 10px; cursor: pointer;
+          font-weight: 700; font-size: 14px; flex-shrink: 0;
         }
-        .hide-scrollbar::-webkit-scrollbar {
-          display: none;
+        .empty { text-align: center; color: #64748b; padding: 40px 10px; font-size: 15px; }
+        .qty-box { display: flex; align-items: center; gap: 10px; }
+        .qty-btn {
+          background: #334155; color: #fff; border: none;
+          width: 32px; height: 32px; border-radius: 8px;
+          font-size: 16px; cursor: pointer; font-weight: 700;
         }
-        input[type="text"], input[type="tel"] {
-            ${inputStyle}
+        .cart-row { display: flex; justify-content: space-between; align-items: center; }
+        .cart-item-name { font-weight: 700; margin-bottom: 4px; font-size: 15px; }
+        .cart-item-meta { color: #94a3b8; font-size: 12px; }
+        .summary-row { display: flex; justify-content: space-between; font-size: 14px; color: #cbd5e1; margin-bottom: 8px; }
+        .total-row {
+          display: flex; justify-content: space-between;
+          font-weight: 800; font-size: 17px;
+          border-top: 1px solid #334155; padding-top: 12px; margin-top: 4px;
         }
-        button {
-            ${inputStyle}
-            padding: 14px 24px;
-            font-size: 16px;
-            text-align: center;
-            margin-top: 10px;
+        .total-row span:last-child { color: #fbbf24; }
+        .track-head { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 12px; margin-bottom: 16px; }
+        .track-code { font-family: monospace; font-weight: 700; }
+        .status-badge {
+          background: rgba(245, 158, 11, 0.15); color: #fbbf24;
+          padding: 6px 12px; border-radius: 999px;
+          font-size: 12px; font-weight: 700;
         }
-        .tab-button {
-            padding: 10px 15px;
-            border: none;
-            background-color: transparent;
-            color: #94a3b8;
-            font-size: 16px;
-            cursor: pointer;
-            transition: color 0.3s, border-bottom 0.3s;
-            border-bottom: 2px solid transparent;
+        .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; text-align: center; margin: 20px 0; }
+        .step { display: flex; flex-direction: column; align-items: center; gap: 6px; opacity: 0.3; }
+        .step.done { opacity: 1; }
+        .step-icon {
+          width: 42px; height: 42px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          background: #1e293b; font-size: 18px;
         }
-        .tab-button.active {
-            color: #fff;
-            border-bottom: 2px solid #f59e0b;
-            font-weight: bold;
+        .step.done .step-icon { background: #f59e0b; }
+        .step-label { font-size: 11px; font-weight: 600; }
+        .items-title { font-size: 12px; color: #94a3b8; margin-bottom: 8px; }
+        .item-row { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 0; }
+        .profile-row { margin-bottom: 10px; font-size: 15px; }
+        .profile-row span { color: #94a3b8; }
+        .stats {
+          display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+          background: rgba(15, 23, 42, 0.6);
+          padding: 16px; border-radius: 14px; text-align: center;
+          margin-top: 16px;
         }
-        .product-card .buy-button {
-            background-color: #22c55e; /* Green */
-            color: white;
-            border: none;
-            padding: 8px 12px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 14px;
-            transition: background-color 0.2s;
-        }
-        .product-card .buy-button:hover {
-            background-color: #16a34a;
-        }
-        .vip-price {
-            color: #eab308; /* Amber */
-            font-size: 14px;
-            text-decoration: line-through;
-            margin-left: 8px;
-        }
-        .cart-item-remove {
-             background-color: #ef4444; /* Red */
-             color: white;
-             border: none;
-             padding: 4px 8px;
-             border-radius: 6px;
-             cursor: pointer;
-             font-size: 12px;
-        }
+        .stat-label { font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+        .stat-value { font-size: 18px; font-weight: 800; color: #fbbf24; }
       `}</style>
 
       {(authStep === 'login' || authStep === 'checking') && (
-        <div className="flex flex-col items-center justify-center h-screen p-4">
-          <img src="/motopol-logo.png" alt="Motopol Logo" className="w-32 mb-6" />
-          <h1 className="text-2xl font-bold mb-2">موتوپل</h1>
-          <p className="text-gray-400 text-center mb-6">سفارش سریع قهوه</p>
-          <form onSubmit={handleLoginSubmit} className="w-full">
+        <div className="center-screen">
+          <h1 className="brand-title">موتوپل ☕</h1>
+          <p className="brand-sub">سفارش سریع قهوه به محل کار شما</p>
+          <form onSubmit={handleLoginSubmit} className="auth-form">
             <input
               type="tel"
+              className="input"
               placeholder="شماره موبایل (مثال: 09121234567)"
               value={phoneInput}
               onChange={(e) => setPhoneInput(e.target.value)}
               required
-              style={inputStyle}
             />
-            <button type="submit" className="btn-gold w-full" disabled={submitting}>
-              {submitting ? 'در حال بررسی...' : 'ورود و مشاهده منو 🚀'}
+            <button type="submit" className="btn-gold" disabled={submitting || authStep === 'checking'}>
+              {authStep === 'checking' ? 'در حال بررسی...' : 'ورود و مشاهده منو 🚀'}
             </button>
           </form>
-          <p className="text-gray-400 mt-4">
+          <p className="auth-switch">
             حساب کاربری ندارید؟{' '}
-            <button onClick={() => setAuthStep('register')} className="text-amber-500 font-semibold">
-              ثبت‌نام کنید
-            </button>
+            <button onClick={() => setAuthStep('register')}>ثبت‌نام کنید</button>
           </p>
         </div>
       )}
 
       {authStep === 'register' && (
-        <div className="p-4 pt-12">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-bold">ثبت عضویت در موتوپل ✨</h2>
-            <button onClick={handleLogout} className="text-red-500 font-semibold">لغو</button>
+        <div className="page">
+          <div className="page-header">
+            <h2 className="page-title">ثبت عضویت در موتوپل ✨</h2>
+            <button onClick={handleLogout} className="cancel-link">لغو</button>
           </div>
-          <p className="text-gray-400 mb-6">فقط همین یک‌بار اطلاعات مغازه را وارد کنید.</p>
           <form onSubmit={handleRegisterSubmit}>
-            <input type="text" placeholder="نام و نام خانوادگی" value={regData.fullName} onChange={(e) => setRegData({ ...regData, fullName: e.target.value })} required style={inputStyle} />
-            <input type="tel" placeholder="شماره موبایل" value={regData.phone} onChange={(e) => setRegData({ ...regData, phone: e.target.value })} required style={inputStyle} />
-            <input type="text" placeholder="نام مغازه / فروشگاه" value={regData.shopName} onChange={(e) => setRegData({ ...regData, shopName: e.target.value })} required style={inputStyle} />
-            <input type="text" placeholder="آدرس دقیق" value={regData.shopAddress} onChange={(e) => setRegData({ ...regData, shopAddress: e.target.value })} required style={inputStyle} />
-            <input type="text" placeholder="توضیحات تحویل (اختیاری)" value={regData.addressNotes} onChange={(e) => setRegData({ ...regData, addressNotes: e.target.value })} style={inputStyle} />
-            <button type="submit" className="btn-gold w-full" disabled={submitting}>
-              {submitting ? 'در حال ثبت...' : 'ثبت و شروع'}
+            <input className="input" type="text" placeholder="نام و نام خانوادگی" value={regData.fullName} onChange={(e) => setRegData({ ...regData, fullName: e.target.value })} required />
+            <input className="input" type="tel" placeholder="شماره موبایل" value={regData.phone} onChange={(e) => setRegData({ ...regData, phone: e.target.value })} required />
+            <input className="input" type="text" placeholder="نام مغازه / فروشگاه" value={regData.shopName} onChange={(e) => setRegData({ ...regData, shopName: e.target.value })} required />
+            <input className="input" type="text" placeholder="آدرس دقیق" value={regData.shopAddress} onChange={(e) => setRegData({ ...regData, shopAddress: e.target.value })} required />
+            <input className="input" type="text" placeholder="توضیحات تحویل (اختیاری)" value={regData.addressNotes} onChange={(e) => setRegData({ ...regData, addressNotes: e.target.value })} />
+            <button type="submit" className="btn-gold" disabled={submitting}>
+              {submitting ? 'در حال ثبت...' : 'ثبت و ورود'}
             </button>
           </form>
         </div>
@@ -434,217 +429,158 @@ export default function MotopolApp() {
 
       {authStep === 'app' && customer && (
         <div>
-          <div className="sticky top-0 bg-[#0f172a] z-10 p-4 flex items-center justify-between border-b border-gray-700">
-             <button onClick={handleLogout} className="text-red-500 font-semibold">خروج</button>
-            <div className="flex items-center space-x-4">
-              <button onClick={() => setActiveTab('menu')} className={`tab-button ${activeTab === 'menu' ? 'active' : ''}`}>منو</button>
-              <button onClick={() => setActiveTab('cart')} className={`tab-button ${activeTab === 'cart' ? 'active' : ''}`}>سبد خرید ({cart.length})</button>
-              <button onClick={() => setActiveTab('track')} className={`tab-button ${activeTab === 'track' ? 'active' : ''}`}>پیگیری</button>
-              <button onClick={() => setActiveTab('profile')} className={`tab-button ${activeTab === 'profile' ? 'active' : ''}`}>پروفایل</button>
+          <div className="topbar">
+            <div className="tabs">
+              <button onClick={() => setActiveTab('menu')} className={`tab-btn ${activeTab === 'menu' ? 'active' : ''}`}>منو</button>
+              <button onClick={() => setActiveTab('cart')} className={`tab-btn ${activeTab === 'cart' ? 'active' : ''}`}>سبد ({cart.length})</button>
+              <button onClick={() => setActiveTab('track')} className={`tab-btn ${activeTab === 'track' ? 'active' : ''}`}>پیگیری</button>
+              <button onClick={() => setActiveTab('profile')} className={`tab-btn ${activeTab === 'profile' ? 'active' : ''}`}>پروفایل</button>
             </div>
+            <button onClick={handleLogout} className="logout-btn">خروج</button>
           </div>
 
-          <div className="p-4">
+          <div className="page">
             {activeTab === 'menu' && (
               <div>
-                <div className="flex space-x-2 mb-4 overflow-x-auto hide-scrollbar">
+                <div className="chips">
                   {categories.map((cat) => (
-                    <button
-                      key={cat}
-                      onClick={() => setActiveCategory(cat)}
-                      className={`tab-button ${activeCategory === cat ? 'active' : ''} flex-shrink-0`}
-                    >
+                    <button key={cat} onClick={() => setActiveCategory(cat)} className={`chip ${activeCategory === cat ? 'active' : ''}`}>
                       {cat}
                     </button>
                   ))}
                 </div>
-
                 {loadingMenu ? (
-                  <div className="flex justify-center items-center h-64">
-                    <p>در حال آماده‌سازی منو...</p>
-                  </div>
+                  <p className="empty">در حال دریافت منو...</p>
                 ) : filteredProducts.length === 0 ? (
-                  <div className="text-center py-10 text-gray-500">
-                    محصولی در این دسته یافت نشد.
-                  </div>
+                  <p className="empty">محصولی در این دسته یافت نشد.</p>
                 ) : (
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    {filteredProducts.map((p) => {
-                      const countInCart = cart.find(item => item.id === p.id)?.quantity || 0;
-                      const isVipPrice = customer?.is_vip && p.vip_price;
-                      return (
-                        <div key={p.id} className="card product-card">
-                          <h3 className="text-lg font-semibold mb-1">{p.name}</h3>
-                          {p.description && <p className="text-gray-400 text-sm mb-2">{p.description}</p>}
-                          <div className="flex items-center justify-between mt-3">
-                            <div>
-                              {isVipPrice && (
-                                <span className="vip-price">
-                                  {Number(p.price).toLocaleString('fa-IR')} ت
-                                </span>
-                              )}
-                              <span className="text-lg font-bold">
-                                {(isVipPrice ? p.vip_price : p.price).toLocaleString('fa-IR')} ت
-                              </span>
-                            </div>
-                            <button onClick={() => addToCart(p)} className="buy-button">
-                              {countInCart === 0 ? 'افزودن' : `${countInCart} عدد`}
-                            </button>
-                          </div>
+                  filteredProducts.map((p) => {
+                    const inCart = cart.find(item => item.id === p.id)?.quantity || 0;
+                    return (
+                      <div key={p.id} className="card product-row">
+                        <div>
+                          <h3 className="product-name">{p.name}</h3>
+                          {p.description && <p className="product-desc">{p.description}</p>}
+                          <span className="product-price">{Number(p.price).toLocaleString('fa-IR')} تومان</span>
                         </div>
-                      );
-                    })}
-                  </div>
+                        <button onClick={() => addToCart(p)} className="buy-btn">
+                          {inCart === 0 ? '+ افزودن' : `${inCart} عدد`}
+                        </button>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             )}
 
             {activeTab === 'cart' && (
               <div>
-                <h2 className="text-2xl font-bold mb-4">سبد خرید</h2>
+                <div className="page-header"><h2 className="page-title">سبد خرید شما</h2></div>
                 {cart.length === 0 ? (
-                  <p className="text-center py-10 text-gray-500">سبد شما خالی است ☕</p>
+                  <p className="empty">سبد خرید شما خالی است ☕</p>
                 ) : (
-                  <div>
+                  <>
                     {cart.map((item) => (
-                      <div key={item.id} className="card flex items-center justify-between mb-3">
+                      <div key={item.id} className="card cart-row">
                         <div>
-                          <h3 className="font-semibold">{item.name}</h3>
-                          <p className="text-sm text-gray-400">
-                            {item.quantity} × {item.price.toLocaleString('fa-IR')} ت
-                          </p>
+                          <h3 className="cart-item-name">{item.name}</h3>
+                          <p className="cart-item-meta">{item.quantity} × {Number(item.price).toLocaleString('fa-IR')} تومان</p>
                         </div>
-                        <div className="flex items-center">
-                          <button
-                            onClick={() => updateCartQuantity(item.id, item.quantity - 1)}
-                            className="bg-red-600 text-white px-2 py-1 rounded mr-2"
-                          >
-                            -
-                          </button>
-                          <span className="font-bold mx-2">{item.quantity}</span>
-                          <button
-                            onClick={() => updateCartQuantity(item.id, item.quantity + 1)}
-                            className="bg-green-600 text-white px-2 py-1 rounded mr-2"
-                          >
-                            +
-                          </button>
-                           <button
-                            onClick={() => updateCartQuantity(item.id, 0)} // Remove item
-                            className="cart-item-remove"
-                           >
-                            حذف
-                           </button>
+                        <div className="qty-box">
+                          <button className="qty-btn" onClick={() => updateCartQuantity(item.id, item.quantity - 1)}>−</button>
+                          <span style={{ fontWeight: 700 }}>{item.quantity}</span>
+                          <button className="qty-btn" onClick={() => updateCartQuantity(item.id, item.quantity + 1)}>+</button>
                         </div>
                       </div>
                     ))}
-                    <div className="mt-6 p-4 card">
-                      <p className="flex justify-between mb-2">
+                    <div className="card">
+                      <div className="summary-row">
                         <span>هزینه ارسال:</span>
-                        <span>{isFreeDelivery ? 'رایگان (۲+ آیتم) 🎉' : deliveryFee.toLocaleString('fa-IR') + ' تومان'}</span>
-                      </p>
-                      <p className="flex justify-between font-bold text-lg mt-3 pt-3 border-t border-gray-700">
+                        <span>{isFreeDelivery ? 'رایگان (۲+ آیتم) 🎉' : `${deliveryFee.toLocaleString('fa-IR')} تومان`}</span>
+                      </div>
+                      <div className="total-row">
                         <span>مبلغ قابل پرداخت:</span>
                         <span>{grandTotal.toLocaleString('fa-IR')} تومان</span>
-                      </p>
-                      <button onClick={handlePlaceOrder} className="btn-gold w-full mt-4" disabled={submitting}>
+                      </div>
+                      <button onClick={handlePlaceOrder} className="btn-gold" disabled={submitting}>
                         {submitting ? 'در حال ثبت سفارش...' : 'ثبت سفارش نهایی'}
                       </button>
                     </div>
-                  </div>
+                  </>
                 )}
               </div>
             )}
 
             {activeTab === 'track' && (
               <div>
-                <h2 className="text-2xl font-bold mb-4">پیگیری سفارش</h2>
-                {!lastOrder ? (
-                  <p className="text-center py-10 text-gray-500">فعلاً سفارش فعالی ندارید ☕</p>
+                <div className="page-header"><h2 className="page-title">وضعیت آخرین سفارش</h2></div>
+عیت آخرین سفارش</h2></div>
+ empty">
+                    <p>هنوز هیچ سفارشی ثبت نکرده‌اید ☕</p>
+                    <button onClick={() => setActiveTab('menu')} className="btn-gold" style={{ maxWidth: 240, margin: '16px auto 0' }}>
+                      مشاهده منو و ثبت سفارش
+                    </button>
+                  </div>
                 ) : (
                   <div className="card">
-                    <div className="flex justify-between items-center mb-4">
-                      <p className="text-lg font-semibold">سفارش #{String(lastOrder.id).slice(0, 8)}</p>
-                      <p className={`font-bold ${lastOrder.status === 'delivered' ? 'text-green-500' : lastOrder.status === 'cancelled' ? 'text-red-500' : 'text-amber-500'}`}>
-                        {STEPS.find(s => s.key === lastOrder.status)?.label || 'وضعیت نامشخص'}
-                      </p>
-                    </div>
-                    <div className="flex justify-between items-center mb-4">
-                      <p>تاریخ: {new Date(lastOrder.created_at).toLocaleString('fa-IR', { hour: '2-digit', minute: '2-digit', hour12: false })}</p>
-                      <p>هزینه ارسال: {lastOrder.delivery_fee ? lastOrder.delivery_fee.toLocaleString('fa-IR') + ' تومان' : 'رایگان'}</p>
-                    </div>
-
-                    <div className="relative">
-                      <div className="flex justify-between items-center mb-1">
-                        {STEPS.map((step, idx) => {
-                          const isCompleted = ['delivered', 'cancelled'].includes(lastOrder.status) ? step.key === lastOrder.status || STEPS.findIndex(s => s.key === lastOrder.status) > idx : step.key === lastOrder.status;
-                          const isCurrent = step.key === lastOrder.status;
-                          const isFuture = STEPS.findIndex(s => s.key === lastOrder.status) < idx;
-                          const isDeliveredOrCancelled = ['delivered', 'cancelled'].includes(lastOrder.status);
-
-                          return (
-                            <div key={step.key} className={`flex flex-col items-center relative ${isFuture ? 'opacity-50' : ''}`}>
-                              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-xl mb-1 transition-all duration-500 ${isDeliveredOrCancelled ? (step.key === lastOrder.status ? 'bg-green-500' : (lastOrder.status === 'delivered' && STEPS.findIndex(s => s.key === lastOrder.status) > idx ? 'bg-green-500' : 'bg-red-500')) : (isCurrent ? 'bg-amber-500 animate-pulse' : (isCompleted ? 'bg-green-500' : 'bg-gray-700'))}`}>
-                                {step.icon}
-                              </div>
-                              <p className={`text-xs w-20 text-center ${isDeliveredOrCancelled ? (step.key === lastOrder.status ? 'text-green-500' : (lastOrder.status === 'delivered' && STEPS.findIndex(s => s.key === lastOrder.status) > idx ? 'text-green-500' : 'text-red-500')) : (isCurrent ? 'text-amber-500' : (isCompleted ? 'text-green-500' : 'text-gray-500'))}`}>
-                                {step.label}
-                              </p>
-                            </div>
-                          );
-                        })}
+                    <div className="track-head">
+                      <div>
+                        <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>کد پیگیری:</p>
+                        <p className="track-code">#{String(lastOrder.id).slice(0, 8)}</p>
                       </div>
-                      {/* Progress Line */}
-                      <div className="absolute top-1/2 left-0 right-0 h-1 -translate-y-1/2 bg-gray-700 -z-10" style={{ marginTop: '6px' }}>
-                        <div
-                          className="h-full bg-green-500 transition-all duration-500"
-                          style={{
-                            width: `${Math.max(0, STEPS.findIndex(s => s.key === lastOrder.status) + (lastOrder.status === 'delivered' ? 1 : 0)) / (STEPS.length -1) * 100}%`,
-                            backgroundColor: lastOrder.status === 'cancelled' ? '#ef4444' : '#16a34a' // Red if cancelled, Green otherwise
-                          }}
-                        />
-                      </div>
+                      <span className="status-badge">
+                        {STEPS.find(s => s.key === lastOrder.status)?.label || lastOrder.status}
+                      </span>
                     </div>
 
-                    <p className="text-sm text-gray-400 mt-6">اقلام سفارش:</p>
-                    {lastOrder.items.map((it, i) => (
-                      <div key={i} className="flex justify-between items-center text-sm py-1">
-                        <span>{it.name}</span>
-                        <span>{it.quantity} × {it.price.toLocaleString('fa-IR')} ت</span>
+                    <div className="steps">
+                      {STEPS.map((step, idx) => (
+                        <div key={step.key} className={`step ${idx <= currentStepIdx ? 'done' : ''}`}>
+                          <div className="step-icon">{step.icon}</div>
+                          <span className="step-label">{step.label}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{ borderTop: '1px solid #334155', paddingTop: 12 }}>
+                      <p className="items-title">اقلام سفارش:</p>
+                      {Array.isArray(lastOrder.items) && lastOrder.items.map((it, i) => (
+                        <div key={i} className="item-row">
+                          <span>{it.name} × {it.quantity}</span>
+                          <span>{Number(it.price * it.quantity).toLocaleString('fa-IR')} تومان</span>
+                        </div>
+                      ))}
+                      <div className="total-row">
+                        <span>مبلغ کل:</span>
+                        <span>{Number(lastOrder.total_price).toLocaleString('fa-IR')} تومان</span>
                       </div>
-                    ))}
-                    <p className="flex justify-between font-bold mt-3 pt-3 border-t border-gray-700">
-                      <span>مبلغ کل:</span>
-                      <span>{Number(lastOrder.total_price).toLocaleString('fa-IR')} تومان</span>
-                    </p>
+                    </div>
                   </div>
                 )}
               </div>
             )}
 
             {activeTab === 'profile' && (
-              <div className="card">
-                <h2 className="text-2xl font-bold mb-4">پروفایل</h2>
-                <p className="text-lg font-semibold">{customer.full_name}</p>
-                <p className="text-gray-400 mb-2">{customer.shop_name}</p>
-                <p className="text-gray-400 mb-4">{customer.phone}</p>
-                <div className="grid grid-cols-2 gap-4 text-center">
-                  <div>
-                    <p className="text-sm text-gray-400">تعداد سفارش‌ها</p>
-                    <p className="font-bold text-xl">{customer.order_count | 0}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-400">مجموع خرید</p>
-                    <p className="font-bold text-xl">{Number(customer.total_spent | 0).toLocaleString('fa-IR')} ت</p>
+              <div>
+                <div className="page-header"><h2 className="page-title">پروفایل کاربر</h2></div>
+                <div className="card">
+                  <p className="profile-row"><span>نام: </span>{customer.full_name}</p>
+                  <p className="profile-row"><span>مغازه: </span>{customer.shop_name}</p>
+                  <p className="profile-row"><span>موبایل: </span>{customer.phone}</p>
+                  <p className="profile-row"><span>آدرس: </span>{customer.shop_address}</p>
+                  <div className="stats">
+                    <div>
+                      <p className="stat-label">تعداد سفارش‌ها</p>
+                      <p className="stat-value">{customer.order_count || 0}</p>
+                    </div>
+                    <div>
+                      <p className="stat-label">مجموع خرید</p>
+                      <p className="stat-value">{Number(customer.total_spent || 0).toLocaleString('fa-IR')} ت</p>
+                    </div>
                   </div>
                 </div>
               </div>
             )}
-          </div>
-
-          <div className="sticky bottom-0 bg-[#0f172a] z-10 p-4 border-t border-gray-700 flex justify-center">
-            <button onClick={handlePlaceOrder} className="btn-gold" disabled={submitting || cart.length === 0}>
-              {submitting ? 'در حال پردازش...' : `ثبت سفارش (${grandTotal.toLocaleString('fa-IR')} تومان)`}
-            </button>
           </div>
         </div>
       )}
