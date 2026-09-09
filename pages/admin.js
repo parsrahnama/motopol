@@ -52,6 +52,10 @@ export default function AdminPanel() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [filterStatus, setFilterStatus] = useState('all');
   const [updatingOrderId, setUpdatingOrderId] = useState(null);
+  const [messageModalOpen, setMessageModalOpen] = useState(false);
+  const [messageCustomer, setMessageCustomer] = useState(null);
+  const [messageText, setMessageText] = useState('');
+  const [sendingMessage, setSendingMessage] = useState(false);
 
   /*
    * دریافت سفارش‌ها
@@ -304,6 +308,72 @@ export default function AdminPanel() {
 
       return next;
     });
+  };
+
+
+  const openMessageModal = order => {
+    if (!order?.customer_id) {
+      alert('مشتری این سفارش پیدا نشد.');
+      return;
+    }
+
+    setMessageCustomer({
+      id: order.customer_id,
+      full_name: order.customer_name || order.full_name || 'مشتری',
+      phone: order.phone || '',
+      shop_name: order.shop_name || ''
+    });
+    setMessageText('');
+    setMessageModalOpen(true);
+  };
+
+  const closeMessageModal = () => {
+    if (sendingMessage) return;
+    setMessageModalOpen(false);
+    setMessageCustomer(null);
+    setMessageText('');
+  };
+
+  const sendMessageToCustomer = async () => {
+    const text = messageText.trim();
+
+    if (!messageCustomer?.id) {
+      alert('مشتری انتخاب نشده است.');
+      return;
+    }
+
+    if (!text) {
+      alert('متن پیام را وارد کنید.');
+      return;
+    }
+
+    setSendingMessage(true);
+
+    try {
+      const { error } = await supabase
+        .from('messages')
+        .insert([{
+          customer_id: messageCustomer.id,
+          message: text,
+          sender_type: 'admin',
+          is_read: false
+        }]);
+
+      if (error) throw error;
+
+      setMessageText('');
+      setMessageModalOpen(false);
+      setMessageCustomer(null);
+      alert('پیام با موفقیت برای مشتری ارسال شد.');
+    } catch (error) {
+      console.error('خطا در ارسال پیام:', error);
+      alert(
+        'خطا در ارسال پیام: ' +
+        (error?.message || 'خطای نامشخص')
+      );
+    } finally {
+      setSendingMessage(false);
+    }
   };
 
   /*
@@ -919,6 +989,27 @@ export default function AdminPanel() {
                   </div>
                 )}
 
+                {/* MESSAGE BUTTON */}
+                <div
+                  style={{
+                    marginTop: 12,
+                    display: 'flex',
+                    justifyContent: 'flex-start'
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => openMessageModal(order)}
+                    style={buttonStyle(
+                      '#111827',
+                      '#fbbf24',
+                      '#a16207'
+                    )}
+                  >
+                    💬 پیام به مشتری
+                  </button>
+                </div>
+
                 {/* STATUS BUTTONS */}
                 <div
                   style={{
@@ -1097,6 +1188,160 @@ export default function AdminPanel() {
           })
         )}
       </div>
+
+      {/* =========================
+          MESSAGE MODAL
+      ========================== */}
+      {messageModalOpen && messageCustomer && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            background: 'rgba(0,0,0,.72)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 20
+          }}
+          onMouseDown={e => {
+            if (e.target === e.currentTarget) {
+              closeMessageModal();
+            }
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 520,
+              background: '#161b22',
+              border: '1px solid #30363d',
+              borderRadius: 16,
+              padding: 20,
+              boxShadow: '0 20px 60px rgba(0,0,0,.45)'
+            }}
+            dir="rtl"
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: 12,
+                alignItems: 'flex-start',
+                marginBottom: 16
+              }}
+            >
+              <div>
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: 17,
+                    color: '#f8fafc'
+                  }}
+                >
+                  💬 ارسال پیام به مشتری
+                </h3>
+
+                <div
+                  style={{
+                    marginTop: 7,
+                    fontSize: 12,
+                    lineHeight: 1.8,
+                    color: '#94a3b8'
+                  }}
+                >
+                  {messageCustomer.full_name}
+                  {messageCustomer.shop_name
+                    ? ` — ${messageCustomer.shop_name}`
+                    : ''}
+                  {messageCustomer.phone
+                    ? ` — ${messageCustomer.phone}`
+                    : ''}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeMessageModal}
+                disabled={sendingMessage}
+                style={{
+                  border: '1px solid #30363d',
+                  background: '#0d1117',
+                  color: '#c9d1d9',
+                  borderRadius: 8,
+                  width: 34,
+                  height: 34,
+                  cursor: 'pointer',
+                  fontSize: 18
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <textarea
+              value={messageText}
+              onChange={e => setMessageText(e.target.value)}
+              placeholder="متن پیام را برای مشتری بنویسید..."
+              rows={6}
+              disabled={sendingMessage}
+              style={{
+                width: '100%',
+                resize: 'vertical',
+                minHeight: 130,
+                padding: 12,
+                borderRadius: 10,
+                border: '1px solid #30363d',
+                background: '#0d1117',
+                color: '#f8fafc',
+                outline: 'none',
+                fontFamily: 'Tahoma, Vazirmatn, sans-serif',
+                fontSize: 13,
+                lineHeight: 1.9
+              }}
+            />
+
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                justifyContent: 'flex-end',
+                marginTop: 12
+              }}
+            >
+              <button
+                type="button"
+                onClick={closeMessageModal}
+                disabled={sendingMessage}
+                style={buttonStyle(
+                  '#21262d',
+                  '#c9d1d9',
+                  '#30363d',
+                  sendingMessage
+                )}
+              >
+                انصراف
+              </button>
+
+              <button
+                type="button"
+                onClick={sendMessageToCustomer}
+                disabled={sendingMessage || !messageText.trim()}
+                style={buttonStyle(
+                  '#f59e0b',
+                  '#000',
+                  '#f59e0b',
+                  sendingMessage || !messageText.trim()
+                )}
+              >
+                {sendingMessage
+                  ? 'در حال ارسال...'
+                  : '📨 ارسال پیام'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* =========================
           MOBILE RESPONSIVE
