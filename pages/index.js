@@ -3,9 +3,9 @@ import Head from 'next/head';
 import { supabase } from '../lib/supabase';
 
 const STEPS = [
-  { key: 'pending', label: 'ثبت سفارش', icon: '📝' },
-  { key: 'processing', label: 'آماده‌سازی', icon: '☕' },
-  { key: 'out_for_delivery', label: 'پیک در مسیر', icon: '🛵' },
+  { key: 'new', label: 'ثبت سفارش', icon: '📝' },
+  { key: 'preparing', label: 'آماده‌سازی', icon: '☕' },
+  { key: 'sent', label: 'پیک در مسیر', icon: '🛵' },
   { key: 'delivered', label: 'تحویل شد', icon: '✅' }
 ];
 
