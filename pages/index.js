@@ -30,6 +30,11 @@ export default function MotopolApp() {
   const [lastOrder, setLastOrder] = useState(null);
   const [activeTab, setActiveTab] = useState('menu');
   const [submitting, setSubmitting] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [editingOrder, setEditingOrder] = useState(false);
+  const [orderEditSaving, setOrderEditSaving] = useState(false);
+  const [editSecondsLeft, setEditSecondsLeft] = useState(0);
 
   const orderChannel = useRef(null);
 
@@ -78,7 +83,7 @@ export default function MotopolApp() {
 
         localStorage.setItem('motopol_phone', cleanPhone);
 
-        await fetchLastOrder(cleanPhone);
+        await fetchLastOrder(cleanPhone, data.id);
         await fetchProducts();
       } else {
         setAuthStep('register');
@@ -96,30 +101,53 @@ export default function MotopolApp() {
     }
   }
 
-  async function fetchLastOrder(phone) {
+  async function fetchOrderWithItems(orderId) {
+    if (!orderId) return null;
+
+    const { data: order, error: orderError } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .maybeSingle();
+
+    if (orderError) throw orderError;
+    if (!order) return null;
+
+    const { data: items, error: itemsError } = await supabase
+      .from('order_items')
+      .select('*')
+      .eq('order_id', orderId)
+      .order('created_at', { ascending: true });
+
+    if (itemsError) throw itemsError;
+
+    return {
+      ...order,
+      items: items || []
+    };
+  }
+
+  async function fetchLastOrder(phone, customerId = customer?.id) {
     try {
-      let { data, error } = await supabase
+      const { data: customerOrders, error } = await supabase
         .from('orders')
         .select('*')
-        .eq('phone', phone)
-        .in('status', [
-          'pending',
-          'processing',
-          'out_for_delivery'
-        ])
+        .eq('customer_id', customerId || '')
+        .in('status', ['new', 'preparing', 'sent'])
         .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .limit(1);
 
       if (error) {
         console.error('Active order fetch error:', error);
       }
 
+      let data = customerOrders?.[0] || null;
+
       if (!data) {
         const res = await supabase
           .from('orders')
           .select('*')
-          .eq('phone', phone)
+          .eq('customer_id', customerId || '')
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -132,7 +160,8 @@ export default function MotopolApp() {
       }
 
       if (data) {
-        setLastOrder(data);
+        const fullOrder = await fetchOrderWithItems(data.id);
+        setLastOrder(fullOrder);
         subscribeToOrderUpdates(data.id);
       } else {
         setLastOrder(null);
@@ -249,7 +278,7 @@ export default function MotopolApp() {
 
       localStorage.setItem('motopol_phone', phone);
 
-      await fetchLastOrder(phone);
+      await fetchLastOrder(phone, customerData.id);
       await fetchProducts();
     } catch (e) {
       console.error('Registration error:', e);
@@ -332,57 +361,71 @@ export default function MotopolApp() {
     setSubmitting(true);
 
     try {
-      const orderItems = cart.map(item => ({
-        id: item.id,
-        name: item.name,
-        price: Number(item.price || 0),
-        quantity: item.quantity
-      }));
+      const subtotal = cart.reduce(
+        (sum, item) =>
+          sum + Number(item.price || 0) * Number(item.quantity || 0),
+        0
+      );
 
-      const { data, error } = await supabase
+      const itemCount = cart.reduce(
+        (sum, item) => sum + Number(item.quantity || 0),
+        0
+      );
+
+      const shipping = itemCount >= 2 ? 0 : 15000;
+      const finalAmount = subtotal + shipping;
+
+      const { data: order, error: orderError } = await supabase
         .from('orders')
-        .insert([
-          {
-            customer_id: customer.id,
-            customer_name: customer.full_name,
-            shop_name: customer.shop_name,
-            phone: customer.phone,
-            shop_address:
-              customer.shop_address +
-              (
-                customer.address_notes
-                  ? ` (${customer.address_notes})`
-                  : ''
-              ),
-            items: orderItems,
-            total_price: payableTotal,
-            delivery_fee: deliveryFee,
-            status: 'pending'
-          }
-        ])
+        .insert([{
+          customer_id: customer.id,
+          status: 'new',
+          subtotal,
+          discount_amount: 0,
+          delivery_fee: shipping,
+          final_amount: finalAmount,
+          payment_method: 'cash',
+          payment_status: 'unpaid',
+          delivery_address: customer.shop_address,
+          address_note: customer.address_notes || null,
+          customer_note: null,
+          editable_until: new Date(Date.now() + 2 * 60 * 1000).toISOString()
+        }])
         .select()
         .single();
 
-      if (error) {
-        throw error;
+      if (orderError) throw orderError;
+
+      const orderItems = cart.map(item => ({
+        order_id: order.id,
+        product_id: item.id,
+        product_name: item.name,
+        quantity: Number(item.quantity),
+        unit_price: Number(item.price || 0),
+        total_price: Number(item.price || 0) * Number(item.quantity)
+      }));
+
+      const { error: itemsError } = await supabase
+        .from('order_items')
+        .insert(orderItems);
+
+      if (itemsError) {
+        await supabase.from('orders').delete().eq('id', order.id);
+        throw itemsError;
       }
 
-      const newOrderCount =
-        Number(customer.order_count || 0) + 1;
+      const newOrderCount = Number(customer.order_count || 0) + 1;
+      const newTotalSpent = Number(customer.total_spent || 0) + finalAmount;
 
-      const newTotalSpent =
-        Number(customer.total_spent || 0) + payableTotal;
-
-      const { data: updatedCustomer, error: customerError } =
-        await supabase
-          .from('customers')
-          .update({
-            order_count: newOrderCount,
-            total_spent: newTotalSpent
-          })
-          .eq('id', customer.id)
-          .select()
-          .single();
+      const { data: updatedCustomer, error: customerError } = await supabase
+        .from('customers')
+        .update({
+          order_count: newOrderCount,
+          total_spent: newTotalSpent
+        })
+        .eq('id', customer.id)
+        .select()
+        .single();
 
       if (!customerError && updatedCustomer) {
         setCustomer(updatedCustomer);
@@ -394,19 +437,186 @@ export default function MotopolApp() {
         }));
       }
 
-      setLastOrder(data);
+      const fullOrder = { ...order, items: orderItems };
+      setLastOrder(fullOrder);
       setCart([]);
+      setEditingOrder(false);
       setActiveTab('track');
-
-      subscribeToOrderUpdates(data.id);
+      subscribeToOrderUpdates(order.id);
     } catch (e) {
       console.error('Order error:', e);
-      alert(
-        'خطا در ثبت سفارش: ' +
-        (e.message || 'خطای نامشخص')
-      );
+      alert('خطا در ثبت سفارش: ' + (e.message || 'خطای نامشخص'));
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const getOrderEditableSeconds = order => {
+    if (!order || order.status !== 'new' || !order.editable_until) return 0;
+    return Math.max(0, Math.ceil((new Date(order.editable_until).getTime() - Date.now()) / 1000));
+  };
+
+  useEffect(() => {
+    if (!lastOrder?.editable_until || lastOrder.status !== 'new') {
+      setEditSecondsLeft(0);
+      return;
+    }
+
+    const tick = () => {
+      const seconds = getOrderEditableSeconds(lastOrder);
+      setEditSecondsLeft(seconds);
+      if (seconds <= 0 && editingOrder) {
+        setEditingOrder(false);
+        setCart([]);
+      }
+    };
+
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [lastOrder, editingOrder]);
+
+  const formatCountdown = seconds => {
+    const min = Math.floor(seconds / 60);
+    const sec = seconds % 60;
+    return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  };
+
+  const startEditOrder = async () => {
+    const seconds = getOrderEditableSeconds(lastOrder);
+    if (!lastOrder || lastOrder.status !== 'new' || seconds <= 0) {
+      alert('مهلت ویرایش این سفارش به پایان رسیده است.');
+      return;
+    }
+
+    try {
+      const freshOrder = await fetchOrderWithItems(lastOrder.id);
+      if (!freshOrder) throw new Error('سفارش پیدا نشد.');
+
+      const freshSeconds = getOrderEditableSeconds(freshOrder);
+      if (freshSeconds <= 0 || freshOrder.status !== 'new') {
+        alert('مهلت ویرایش این سفارش به پایان رسیده است.');
+        return;
+      }
+
+      const editableCart = (freshOrder.items || []).map(item => ({
+        id: item.product_id,
+        name: item.product_name,
+        price: Number(item.unit_price || 0),
+        quantity: Number(item.quantity || 1)
+      }));
+
+      setLastOrder(freshOrder);
+      setCart(editableCart);
+      setEditingOrder(true);
+      setActiveTab('cart');
+    } catch (e) {
+      console.error('Edit order error:', e);
+      alert('خطا در دریافت سفارش: ' + (e.message || 'خطای نامشخص'));
+    }
+  };
+
+  const cancelEditOrder = () => {
+    setEditingOrder(false);
+    setCart([]);
+    setActiveTab('track');
+  };
+
+  const handleUpdateOrder = async () => {
+    if (!customer || !lastOrder) return;
+
+    if (cart.length === 0) {
+      alert('برای ویرایش، حداقل یک محصول انتخاب کنید.');
+      return;
+    }
+
+    if (getOrderEditableSeconds(lastOrder) <= 0 || lastOrder.status !== 'new') {
+      alert('مهلت ویرایش این سفارش به پایان رسیده است.');
+      setEditingOrder(false);
+      setCart([]);
+      return;
+    }
+
+    setOrderEditSaving(true);
+
+    try {
+      const payload = cart.map(item => ({
+        product_id: item.id,
+        quantity: Number(item.quantity)
+      }));
+
+      const { data, error } = await supabase.rpc('update_order_from_cart', {
+        p_order_id: lastOrder.id,
+        p_customer_id: customer.id,
+        p_items: payload
+      });
+
+      if (error) throw error;
+
+      const updated = Array.isArray(data) ? data[0] : data;
+      const fullOrder = await fetchOrderWithItems(lastOrder.id);
+
+      setLastOrder(fullOrder || updated);
+      setCart([]);
+      setEditingOrder(false);
+      setActiveTab('track');
+      alert('سفارش با موفقیت ویرایش شد.');
+    } catch (e) {
+      console.error('Update order error:', e);
+      alert('خطا در ویرایش سفارش: ' + (e.message || 'مهلت ویرایش تمام شده یا سفارش قابل ویرایش نیست.'));
+    } finally {
+      setOrderEditSaving(false);
+    }
+  };
+
+  const startEditProfile = () => {
+    setRegData({
+      fullName: customer?.full_name || '',
+      phone: customer?.phone || '',
+      shopName: customer?.shop_name || '',
+      shopAddress: customer?.shop_address || '',
+      addressNotes: customer?.address_notes || ''
+    });
+    setEditingProfile(true);
+  };
+
+  const handleProfileEdit = async e => {
+    e.preventDefault();
+    if (!customer) return;
+
+    const fullName = regData.fullName.trim();
+    const shopName = regData.shopName.trim();
+    const shopAddress = regData.shopAddress.trim();
+    const addressNotes = regData.addressNotes.trim();
+
+    if (!fullName || !shopName || !shopAddress) {
+      alert('لطفاً نام، نام مغازه و آدرس را کامل کنید.');
+      return;
+    }
+
+    setProfileSaving(true);
+    try {
+      const { data, error } = await supabase
+        .from('customers')
+        .update({
+          full_name: fullName,
+          shop_name: shopName,
+          shop_address: shopAddress,
+          address_notes: addressNotes || null
+        })
+        .eq('id', customer.id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      setCustomer(data);
+      setEditingProfile(false);
+      alert('پروفایل با موفقیت بروزرسانی شد.');
+    } catch (e) {
+      console.error('Profile update error:', e);
+      alert('خطا در بروزرسانی پروفایل: ' + (e.message || 'خطای نامشخص'));
+    } finally {
+      setProfileSaving(false);
     }
   };
 
@@ -428,8 +638,14 @@ export default function MotopolApp() {
           table: 'orders',
           filter: `id=eq.${orderId}`
         },
-        payload => {
-          setLastOrder(payload.new);
+        async payload => {
+          try {
+            const fullOrder = await fetchOrderWithItems(payload.new.id);
+            setLastOrder(fullOrder || payload.new);
+          } catch (e) {
+            console.error('Order realtime refresh error:', e);
+            setLastOrder(payload.new);
+          }
         }
       )
       .subscribe();
@@ -468,11 +684,7 @@ export default function MotopolApp() {
           product => product.category === activeCategory
         );
 
-  const currentStepIdx = lastOrder
-    ? STEPS.findIndex(
-        step => step.key === lastOrder.status
-      )
-    : -1;
+  const currentStepIdx = lastOrder ? STEPS.findIndex(step => step.key === lastOrder.status) : -1;
 
   return (
     <div className="app">
@@ -933,6 +1145,44 @@ export default function MotopolApp() {
           color: #fbbf24;
         }
 
+
+        .edit-order-banner {
+          background: rgba(245, 158, 11, 0.12);
+          border: 1px solid rgba(245, 158, 11, 0.35);
+          color: #fbbf24;
+          border-radius: 14px;
+          padding: 12px;
+          margin-bottom: 14px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 10px;
+          font-size: 12px;
+        }
+
+        .edit-order-banner span { color: #cbd5e1; }
+
+        .edit-order-banner button,
+        .cancel-edit-btn {
+          border: 1px solid #475569;
+          background: #1e293b;
+          color: #fff;
+          border-radius: 10px;
+          padding: 10px 12px;
+          cursor: pointer;
+          font-weight: 700;
+        }
+
+        .edit-cart-actions {
+          display: grid;
+          gap: 8px;
+        }
+
+        .cancel-edit-btn {
+          width: 100%;
+          margin-top: 8px;
+        }
+
         @media (max-width: 380px) {
           .tab-btn {
             padding: 8px 7px;
@@ -1373,16 +1623,37 @@ export default function MotopolApp() {
                         </span>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={handlePlaceOrder}
-                        className="btn-gold"
-                        disabled={submitting}
-                      >
-                        {submitting
-                          ? 'در حال ثبت سفارش...'
-                          : 'ثبت سفارش نهایی'}
-                      </button>
+                      {editingOrder && (
+                        <div className="edit-cart-actions">
+                          <button
+                            type="button"
+                            onClick={handleUpdateOrder}
+                            className="btn-gold"
+                            disabled={orderEditSaving}
+                          >
+                            {orderEditSaving ? 'در حال ذخیره...' : 'ذخیره تغییرات سفارش'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelEditOrder}
+                            className="cancel-edit-btn"
+                            disabled={orderEditSaving}
+                          >
+                            انصراف
+                          </button>
+                        </div>
+                      )}
+
+                      {!editingOrder && (
+                        <button
+                          type="button"
+                          onClick={handlePlaceOrder}
+                          className="btn-gold"
+                          disabled={submitting}
+                        >
+                          {submitting ? 'در حال ثبت سفارش...' : 'ثبت سفارش نهایی'}
+                        </button>
+                      )}
                     </div>
                   </>
                 )}
@@ -1397,6 +1668,16 @@ export default function MotopolApp() {
                     وضعیت آخرین سفارش
                   </h2>
                 </div>
+
+                {lastOrder && lastOrder.status === 'new' && editSecondsLeft > 0 && (
+                  <div className="edit-order-banner">
+                    <div>
+                      <strong>✏️ امکان ویرایش سفارش</strong>
+                      <span> تا {formatCountdown(editSecondsLeft)} فرصت دارید.</span>
+                    </div>
+                    <button type="button" onClick={startEditOrder}>ویرایش سفارش</button>
+                  </div>
+                )}
 
                 {!lastOrder ? (
                   <div className="empty">
@@ -1487,38 +1768,12 @@ export default function MotopolApp() {
                         اقلام سفارش:
                       </p>
 
-                      {Array.isArray(
-                        lastOrder.items
-                      ) &&
-                        lastOrder.items.map(
-                          (item, index) => (
-                            <div
-                              key={index}
-                              className="item-row"
-                            >
-                              <span>
-                                {item.name} ×{' '}
-                                {item.quantity}
-                              </span>
-
-                              <span>
-                                {Number(
-                                  Number(
-                                    item.price ||
-                                      0
-                                  ) *
-                                    Number(
-                                      item.quantity ||
-                                        0
-                                    )
-                                ).toLocaleString(
-                                  'fa-IR'
-                                )}{' '}
-                                تومان
-                              </span>
-                            </div>
-                          )
-                        )}
+                      {Array.isArray(lastOrder.items) && lastOrder.items.map((item, index) => (
+                        <div key={item.id || index} className="item-row">
+                          <span>{item.product_name} × {item.quantity}</span>
+                          <span>{Number(item.total_price || 0).toLocaleString('fa-IR')} تومان</span>
+                        </div>
+                      ))}
 
                       <div
                         className="summary-row"
@@ -1550,10 +1805,7 @@ export default function MotopolApp() {
                         </span>
 
                         <span>
-                          {Number(
-                            lastOrder.total_price ||
-                              0
-                          ).toLocaleString(
+                          {Number(lastOrder.final_amount || 0).toLocaleString(
                             'fa-IR'
                           )}{' '}
                           تومان
@@ -1575,63 +1827,48 @@ export default function MotopolApp() {
                 </div>
 
                 <div className="card">
-                  <p className="profile-row">
-                    <span>نام: </span>
-                    {customer.full_name}
-                  </p>
+                  {!editingProfile ? (
+                    <>
+                      <p className="profile-row"><span>نام: </span>{customer.full_name}</p>
+                      <p className="profile-row"><span>مغازه: </span>{customer.shop_name}</p>
+                      <p className="profile-row"><span>موبایل: </span>{customer.phone}</p>
+                      <p className="profile-row"><span>آدرس: </span>{customer.shop_address}</p>
+                      {customer.address_notes && (
+                        <p className="profile-row"><span>توضیحات تحویل: </span>{customer.address_notes}</p>
+                      )}
 
-                  <p className="profile-row">
-                    <span>مغازه: </span>
-                    {customer.shop_name}
-                  </p>
+                      <button type="button" className="btn-gold" onClick={startEditProfile}>
+                        ویرایش پروفایل
+                      </button>
 
-                  <p className="profile-row">
-                    <span>موبایل: </span>
-                    {customer.phone}
-                  </p>
-
-                  <p className="profile-row">
-                    <span>آدرس: </span>
-                    {customer.shop_address}
-                  </p>
-
-                  {customer.address_notes && (
-                    <p className="profile-row">
-                      <span>
-                        توضیحات تحویل:{' '}
-                      </span>
-                      {customer.address_notes}
-                    </p>
+                      <div className="stats">
+                        <div>
+                          <p className="stat-label">تعداد سفارش‌ها</p>
+                          <p className="stat-value">{customer.order_count || 0}</p>
+                        </div>
+                        <div>
+                          <p className="stat-label">مجموع خرید</p>
+                          <p className="stat-value">
+                            {Number(customer.total_spent || 0).toLocaleString('fa-IR')} تومان
+                          </p>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <form onSubmit={handleProfileEdit}>
+                      <input className="input" value={regData.fullName} onChange={e => setRegData(prev => ({ ...prev, fullName: e.target.value }))} placeholder="نام و نام خانوادگی" required />
+                      <input className="input" value={regData.phone} disabled type="tel" placeholder="شماره موبایل" />
+                      <input className="input" value={regData.shopName} onChange={e => setRegData(prev => ({ ...prev, shopName: e.target.value }))} placeholder="نام مغازه / فروشگاه" required />
+                      <input className="input" value={regData.shopAddress} onChange={e => setRegData(prev => ({ ...prev, shopAddress: e.target.value }))} placeholder="آدرس دقیق" required />
+                      <input className="input" value={regData.addressNotes} onChange={e => setRegData(prev => ({ ...prev, addressNotes: e.target.value }))} placeholder="توضیحات تحویل (اختیاری)" />
+                      <button type="submit" className="btn-gold" disabled={profileSaving}>
+                        {profileSaving ? 'در حال ذخیره...' : 'ذخیره پروفایل'}
+                      </button>
+                      <button type="button" className="cancel-edit-btn" onClick={() => setEditingProfile(false)} disabled={profileSaving}>
+                        انصراف
+                      </button>
+                    </form>
                   )}
-
-                  <div className="stats">
-                    <div>
-                      <p className="stat-label">
-                        تعداد سفارش‌ها
-                      </p>
-
-                      <p className="stat-value">
-                        {customer.order_count ||
-                          0}
-                      </p>
-                    </div>
-
-                    <div>
-                      <p className="stat-label">
-                        مجموع خرید
-                      </p>
-
-                      <p className="stat-value">
-                        {Number(
-                          customer.total_spent ||
-                            0
-                        ).toLocaleString(
-                          'fa-IR'
-                        )}{' '}
-                        تومان
-                      </p>
-                    </div>
-                  </div>
                 </div>
               </div>
             )}
