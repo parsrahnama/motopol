@@ -84,7 +84,7 @@ export default function MotopolApp() {
         localStorage.setItem('motopol_phone', cleanPhone);
 
         await fetchLastOrder(cleanPhone, data.id);
-        await fetchProducts();
+        await fetchProducts(data);
       } else {
         setAuthStep('register');
 
@@ -171,7 +171,7 @@ export default function MotopolApp() {
     }
   }
 
-  async function fetchProducts() {
+  async function fetchProducts(customerOverride = null) {
     setLoadingMenu(true);
 
     try {
@@ -185,7 +185,20 @@ export default function MotopolApp() {
         throw error;
       }
 
-      const productList = data || [];
+      const activeCustomer = customerOverride || customer;
+      const isVip = Boolean(activeCustomer?.is_vip);
+
+      // ستون قیمت در دیتابیس base_price و vip_price است.
+      // برای اینکه بقیه کد برنامه ساده بماند، قیمت نهایی مشتری را
+      // داخل فیلد مجازی price قرار می‌دهیم.
+      const productList = (data || []).map(product => ({
+        ...product,
+        price: Number(
+          isVip
+            ? (product.vip_price ?? product.base_price ?? 0)
+            : (product.base_price ?? 0)
+        )
+      }));
 
       setProducts(productList);
 
@@ -279,7 +292,7 @@ export default function MotopolApp() {
       localStorage.setItem('motopol_phone', phone);
 
       await fetchLastOrder(phone, customerData.id);
-      await fetchProducts();
+      await fetchProducts(customerData);
     } catch (e) {
       console.error('Registration error:', e);
       alert('خطا در ثبت‌نام: ' + (e.message || 'خطای نامشخص'));
