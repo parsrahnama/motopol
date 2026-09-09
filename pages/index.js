@@ -361,61 +361,64 @@ export default function MotopolApp() {
     setSubmitting(true);
 
     try {
-      const subtotal = cart.reduce(
-        (sum, item) =>
-          sum + Number(item.price || 0) * Number(item.quantity || 0),
-        0
-      );
-
-      const itemCount = cart.reduce(
-        (sum, item) => sum + Number(item.quantity || 0),
-        0
-      );
-
-      const shipping = itemCount >= 2 ? 0 : 15000;
-      const finalAmount = subtotal + shipping;
-
-      const { data: order, error: orderError } = await supabase
-        .from('orders')
-        .insert([{
-          customer_id: customer.id,
-          status: 'new',
-          subtotal,
-          discount_amount: 0,
-          delivery_fee: shipping,
-          final_amount: finalAmount,
-          payment_method: 'cash',
-          payment_status: 'unpaid',
-          delivery_address: customer.shop_address,
-          address_note: customer.address_notes || null,
-          customer_note: null,
-          editable_until: new Date(Date.now() + 2 * 60 * 1000).toISOString()
-        }])
-        .select()
-        .single();
-
-      if (orderError) throw orderError;
-
+      // فقط شناسه محصول و تعداد را به دیتابیس می‌فرستیم.
+      // قیمت، جمع سفارش و هزینه ارسال در PostgreSQL محاسبه می‌شود.
       const orderItems = cart.map(item => ({
-        order_id: order.id,
         product_id: item.id,
-        product_name: item.name,
-        quantity: Number(item.quantity),
-        unit_price: Number(item.price || 0),
-        total_price: Number(item.price || 0) * Number(item.quantity)
+        quantity: Number(item.quantity || 1)
       }));
 
-      const { error: itemsError } = await supabase
-        .from('order_items')
-        .insert(orderItems);
+      const { data: rpcData, error: rpcError } = await supabase.rpc(
+        'create_order',
+        {
+          p_customer_id: customer.id,
+          p_items: orderItems,
+          p_payment_method: 'cash',
+          p_customer_note: null
+        }
+      );
 
-      if (itemsError) {
-        await supabase.from('orders').delete().eq('id', order.id);
-        throw itemsError;
+      if (rpcError) {
+        throw rpcError;
       }
 
+      if (!rpcData || !rpcData.order_id) {
+        throw new Error('شناسه سفارش از سرور دریافت نشد.');
+      }
+
+      // سفارش ایجادشده را از دیتابیس می‌گیریم.
+      const { data: createdOrder, error: orderFetchError } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', rpcData.order_id)
+        .eq('customer_id', customer.id)
+        .single();
+
+      if (orderFetchError) {
+        throw orderFetchError;
+      }
+
+      // اقلام واقعی سفارش را از دیتابیس می‌گیریم.
+      const { data: createdItems, error: itemsFetchError } = await supabase
+        .from('order_items')
+        .select('*')
+        .eq('order_id', rpcData.order_id)
+        .order('created_at', { ascending: true });
+
+      if (itemsFetchError) {
+        throw itemsFetchError;
+      }
+
+      const fullOrder = {
+        ...createdOrder,
+        items: createdItems || []
+      };
+
+      // آمار مشتری را فقط بعد از موفقیت ثبت سفارش بروزرسانی می‌کنیم.
       const newOrderCount = Number(customer.order_count || 0) + 1;
-      const newTotalSpent = Number(customer.total_spent || 0) + finalAmount;
+      const newTotalSpent =
+        Number(customer.total_spent || 0) +
+        Number(createdOrder.final_amount || 0);
 
       const { data: updatedCustomer, error: customerError } = await supabase
         .from('customers')
@@ -430,6 +433,11 @@ export default function MotopolApp() {
       if (!customerError && updatedCustomer) {
         setCustomer(updatedCustomer);
       } else {
+        console.warn(
+          'آمار مشتری بروزرسانی نشد:',
+          customerError
+        );
+
         setCustomer(prev => ({
           ...prev,
           order_count: newOrderCount,
@@ -437,15 +445,17 @@ export default function MotopolApp() {
         }));
       }
 
-      const fullOrder = { ...order, items: orderItems };
       setLastOrder(fullOrder);
       setCart([]);
       setEditingOrder(false);
       setActiveTab('track');
-      subscribeToOrderUpdates(order.id);
+      subscribeToOrderUpdates(createdOrder.id);
     } catch (e) {
       console.error('Order error:', e);
-      alert('خطا در ثبت سفارش: ' + (e.message || 'خطای نامشخص'));
+      alert(
+        'خطا در ثبت سفارش: ' +
+        (e?.message || 'خطای نامشخص')
+      );
     } finally {
       setSubmitting(false);
     }
