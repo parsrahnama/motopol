@@ -35,8 +35,12 @@ export default function MotopolApp() {
   const [editingOrder, setEditingOrder] = useState(false);
   const [orderEditSaving, setOrderEditSaving] = useState(false);
   const [editSecondsLeft, setEditSecondsLeft] = useState(0);
+  const [messages, setMessages] = useState([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [unreadMessages, setUnreadMessages] = useState(0);
 
   const orderChannel = useRef(null);
+  const messageChannel = useRef(null);
 
   useEffect(() => {
     initializeApp();
@@ -44,6 +48,9 @@ export default function MotopolApp() {
     return () => {
       if (orderChannel.current) {
         supabase.removeChannel(orderChannel.current);
+      }
+      if (messageChannel.current) {
+        supabase.removeChannel(messageChannel.current);
       }
     };
   }, []);
@@ -84,7 +91,9 @@ export default function MotopolApp() {
         localStorage.setItem('motopol_phone', cleanPhone);
 
         await fetchLastOrder(cleanPhone, data.id);
-        await fetchProducts(data);
+        await fetchMessages(data.id);
+        subscribeToMessages(data.id);
+        await fetchProducts();
       } else {
         setAuthStep('register');
 
@@ -99,6 +108,93 @@ export default function MotopolApp() {
       console.error('Error checking customer:', e);
       setAuthStep('login');
     }
+  }
+
+
+  async function fetchMessages(customerId = customer?.id) {
+    if (!customerId) return;
+
+    setMessagesLoading(true);
+
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('customer_id', customerId)
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+
+      const list = data || [];
+      setMessages(list);
+      setUnreadMessages(
+        list.filter(message => !message.is_read).length
+      );
+    } catch (error) {
+      console.error('خطا در دریافت پیام‌ها:', error);
+    } finally {
+      setMessagesLoading(false);
+    }
+  }
+
+  function subscribeToMessages(customerId) {
+    if (!customerId) return;
+
+    if (messageChannel.current) {
+      supabase.removeChannel(messageChannel.current);
+      messageChannel.current = null;
+    }
+
+    const channel = supabase
+      .channel(`customer_messages_${customerId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'messages',
+          filter: `customer_id=eq.${customerId}`
+        },
+        async () => {
+          await fetchMessages(customerId);
+        }
+      )
+      .subscribe();
+
+    messageChannel.current = channel;
+  }
+
+  async function markMessagesAsRead() {
+    if (!customer?.id || messages.length === 0) return;
+
+    const unreadIds = messages
+      .filter(message => !message.is_read)
+      .map(message => message.id);
+
+    if (unreadIds.length === 0) {
+      setUnreadMessages(0);
+      return;
+    }
+
+    const { error } = await supabase
+      .from('messages')
+      .update({ is_read: true })
+      .in('id', unreadIds)
+      .eq('customer_id', customer.id);
+
+    if (error) {
+      console.error('خطا در خواندن پیام‌ها:', error);
+      return;
+    }
+
+    setMessages(prev =>
+      prev.map(message =>
+        unreadIds.includes(message.id)
+          ? { ...message, is_read: true }
+          : message
+      )
+    );
+    setUnreadMessages(0);
   }
 
   async function fetchOrderWithItems(orderId) {
@@ -171,7 +267,7 @@ export default function MotopolApp() {
     }
   }
 
-  async function fetchProducts(customerOverride = null) {
+  async function fetchProducts() {
     setLoadingMenu(true);
 
     try {
@@ -185,20 +281,7 @@ export default function MotopolApp() {
         throw error;
       }
 
-      const activeCustomer = customerOverride || customer;
-      const isVip = Boolean(activeCustomer?.is_vip);
-
-      // ستون قیمت در دیتابیس base_price و vip_price است.
-      // برای اینکه بقیه کد برنامه ساده بماند، قیمت نهایی مشتری را
-      // داخل فیلد مجازی price قرار می‌دهیم.
-      const productList = (data || []).map(product => ({
-        ...product,
-        price: Number(
-          isVip
-            ? (product.vip_price ?? product.base_price ?? 0)
-            : (product.base_price ?? 0)
-        )
-      }));
+      const productList = data || [];
 
       setProducts(productList);
 
@@ -292,7 +375,9 @@ export default function MotopolApp() {
       localStorage.setItem('motopol_phone', phone);
 
       await fetchLastOrder(phone, customerData.id);
-      await fetchProducts(customerData);
+      await fetchMessages(customerData.id);
+      subscribeToMessages(customerData.id);
+      await fetchProducts();
     } catch (e) {
       console.error('Registration error:', e);
       alert('خطا در ثبت‌نام: ' + (e.message || 'خطای نامشخص'));
@@ -684,6 +769,13 @@ export default function MotopolApp() {
       orderChannel.current = null;
     }
 
+    if (messageChannel.current) {
+      supabase.removeChannel(messageChannel.current);
+      messageChannel.current = null;
+    }
+
+    setMessages([]);
+    setUnreadMessages(0);
     setCustomer(null);
     setLastOrder(null);
     setCart([]);
@@ -1434,6 +1526,41 @@ export default function MotopolApp() {
 
               <button
                 type="button"
+                onClick={async () => {
+                  setActiveTab('messages');
+                  await markMessagesAsRead();
+                }}
+                className={`tab-btn ${
+                  activeTab === 'messages'
+                    ? 'active'
+                    : ''
+                }`}
+              >
+                پیام‌ها
+                {unreadMessages > 0 && (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      minWidth: 20,
+                      height: 20,
+                      marginRight: 5,
+                      padding: '0 5px',
+                      borderRadius: 999,
+                      background: '#ef4444',
+                      color: '#fff',
+                      fontSize: 10,
+                      fontWeight: 'bold'
+                    }}
+                  >
+                    {unreadMessages}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
                 onClick={() =>
                   setActiveTab('profile')
                 }
@@ -1837,6 +1964,95 @@ export default function MotopolApp() {
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* MESSAGES */}
+            {activeTab === 'messages' && (
+              <div>
+                <div className="page-header">
+                  <h2 className="page-title">
+                    پیام‌های موتوپل
+                  </h2>
+                </div>
+
+                <div className="card">
+                  {messagesLoading ? (
+                    <div className="empty">
+                      در حال دریافت پیام‌ها...
+                    </div>
+                  ) : messages.length === 0 ? (
+                    <div className="empty">
+                      <p>هنوز پیامی برای شما ارسال نشده است.</p>
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 10
+                      }}
+                    >
+                      {messages.map(message => (
+                        <div
+                          key={message.id}
+                          style={{
+                            padding: 14,
+                            borderRadius: 12,
+                            background: message.is_read
+                              ? '#111827'
+                              : '#1f2937',
+                            border: message.is_read
+                              ? '1px solid #263244'
+                              : '1px solid #f59e0b',
+                            boxShadow: message.is_read
+                              ? 'none'
+                              : '0 0 0 1px rgba(245,158,11,.08)'
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              gap: 10,
+                              marginBottom: 7,
+                              fontSize: 11,
+                              color: '#94a3b8'
+                            }}
+                          >
+                            <span>
+                              {message.is_read
+                                ? '💬 پیام موتوپل'
+                                : '🔔 پیام جدید'}
+                            </span>
+                            <span>
+                              {message.created_at
+                                ? new Date(message.created_at).toLocaleString(
+                                    'fa-IR',
+                                    {
+                                      dateStyle: 'short',
+                                      timeStyle: 'short'
+                                    }
+                                  )
+                                : ''}
+                            </span>
+                          </div>
+
+                          <div
+                            style={{
+                              fontSize: 14,
+                              lineHeight: 2,
+                              color: '#f8fafc',
+                              whiteSpace: 'pre-wrap'
+                            }}
+                          >
+                            {message.message}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
