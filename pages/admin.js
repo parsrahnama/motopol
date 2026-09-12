@@ -46,6 +46,13 @@ const STATUS_ORDER = [
 ];
 
 export default function AdminPanel() {
+  const [authLoading, setAuthLoading] = useState(true);
+  const [session, setSession] = useState(null);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
+
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -57,10 +64,120 @@ export default function AdminPanel() {
   const [messageText, setMessageText] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
 
+
+  const isAdminSession = currentSession => {
+    return (
+      currentSession?.user?.app_metadata?.role === 'admin'
+    );
+  };
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadSession = async () => {
+      try {
+        const {
+          data: { session: currentSession }
+        } = await supabase.auth.getSession();
+
+        if (!mounted) return;
+
+        if (currentSession && isAdminSession(currentSession)) {
+          setSession(currentSession);
+        } else {
+          if (currentSession) {
+            await supabase.auth.signOut();
+          }
+          setSession(null);
+        }
+      } catch (error) {
+        console.error('Auth session error:', error);
+        setSession(null);
+      } finally {
+        if (mounted) setAuthLoading(false);
+      }
+    };
+
+    loadSession();
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange(async (_event, currentSession) => {
+      if (!mounted) return;
+
+      if (currentSession && isAdminSession(currentSession)) {
+        setSession(currentSession);
+        setAuthError('');
+      } else {
+        if (currentSession) {
+          await supabase.auth.signOut();
+          setAuthError('این حساب دسترسی مدیر ندارد.');
+        }
+        setSession(null);
+      }
+      setAuthLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const handleAdminLogin = async event => {
+    event.preventDefault();
+
+    const email = loginEmail.trim();
+
+    if (!email || !loginPassword) {
+      setAuthError('ایمیل و رمز عبور را وارد کنید.');
+      return;
+    }
+
+    setLoginLoading(true);
+    setAuthError('');
+
+    try {
+      const { data, error } =
+        await supabase.auth.signInWithPassword({
+          email,
+          password: loginPassword
+        });
+
+      if (error) throw error;
+
+      if (!isAdminSession(data.session)) {
+        await supabase.auth.signOut();
+        throw new Error('این حساب دسترسی مدیر ندارد.');
+      }
+
+      setSession(data.session);
+      setLoginPassword('');
+    } catch (error) {
+      console.error('Admin login error:', error);
+      setSession(null);
+      setAuthError(
+        error?.message === 'Invalid login credentials'
+          ? 'ایمیل یا رمز عبور اشتباه است.'
+          : (error?.message || 'ورود ناموفق بود.')
+      );
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleAdminLogout = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+    setOrders([]);
+  };
+
   /*
    * دریافت سفارش‌ها
    */
   const fetchOrders = useCallback(async (showRefreshState = false) => {
+    if (!session) return;
+
     if (showRefreshState) {
       setRefreshing(true);
     } else {
@@ -156,7 +273,7 @@ export default function AdminPanel() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [session]);
 
   /*
    * تنظیم صدای اعلان
@@ -181,6 +298,12 @@ export default function AdminPanel() {
    * بعد از INSERT/UPDATE سفارش را دوباره کامل می‌خوانیم.
    */
   useEffect(() => {
+    if (!session) {
+      setOrders([]);
+      setLoading(false);
+      return undefined;
+    }
+
     let mounted = true;
 
     fetchOrders();
@@ -286,7 +409,7 @@ export default function AdminPanel() {
       mounted = false;
       supabase.removeChannel(channel);
     };
-  }, [fetchOrders]);
+  }, [fetchOrders, session]);
 
   /*
    * تغییر وضعیت صدا
@@ -549,6 +672,183 @@ export default function AdminPanel() {
     };
   };
 
+  if (authLoading) {
+    return (
+      <div
+        dir="rtl"
+        style={{
+          minHeight: '100vh',
+          background: '#0d1117',
+          color: '#e2e8f0',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 20,
+          fontFamily: 'Tahoma, Vazirmatn, sans-serif'
+        }}
+      >
+        <div
+          style={{
+            width: '100%',
+            maxWidth: 420,
+            background: '#161b22',
+            border: '1px solid #30363d',
+            borderRadius: 18,
+            padding: 28,
+            textAlign: 'center'
+          }}
+        >
+          <div style={{ fontSize: 32, marginBottom: 12 }}>☕</div>
+          <h1 style={{ margin: 0, fontSize: 20, color: '#f59e0b' }}>
+            پنل مدیریت موتوپل
+          </h1>
+          <p style={{ color: '#8b949e', fontSize: 13, marginTop: 10 }}>
+            در حال بررسی دسترسی...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div
+        dir="rtl"
+        style={{
+          minHeight: '100vh',
+          background: '#0d1117',
+          color: '#e2e8f0',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 20,
+          fontFamily: 'Tahoma, Vazirmatn, sans-serif'
+        }}
+      >
+        <form
+          onSubmit={handleAdminLogin}
+          style={{
+            width: '100%',
+            maxWidth: 420,
+            background: '#161b22',
+            border: '1px solid #30363d',
+            borderRadius: 18,
+            padding: 28,
+            boxShadow: '0 20px 60px rgba(0,0,0,.35)'
+          }}
+        >
+          <div style={{ textAlign: 'center', marginBottom: 24 }}>
+            <div style={{ fontSize: 36, marginBottom: 10 }}>☕</div>
+            <h1 style={{ margin: 0, fontSize: 22, color: '#f59e0b' }}>
+              ورود به پنل مدیریت
+            </h1>
+            <p style={{ color: '#8b949e', fontSize: 12, lineHeight: 1.8 }}>
+              برای دسترسی به سفارش‌ها وارد حساب مدیر شوید.
+            </p>
+          </div>
+
+          {authError && (
+            <div
+              style={{
+                background: '#3f0d16',
+                border: '1px solid #e11d48',
+                color: '#fb7185',
+                borderRadius: 10,
+                padding: 10,
+                marginBottom: 14,
+                fontSize: 12,
+                lineHeight: 1.8
+              }}
+            >
+              {authError}
+            </div>
+          )}
+
+          <label
+            style={{
+              display: 'block',
+              marginBottom: 7,
+              fontSize: 12,
+              color: '#c9d1d9'
+            }}
+          >
+            ایمیل مدیر
+          </label>
+          <input
+            type="email"
+            value={loginEmail}
+            onChange={e => setLoginEmail(e.target.value)}
+            autoComplete="username"
+            placeholder="admin@example.com"
+            style={{
+              width: '100%',
+              padding: '12px 13px',
+              marginBottom: 15,
+              borderRadius: 10,
+              border: '1px solid #30363d',
+              background: '#0d1117',
+              color: '#f8fafc',
+              outline: 'none',
+              fontSize: 13,
+              direction: 'ltr',
+              textAlign: 'left'
+            }}
+          />
+
+          <label
+            style={{
+              display: 'block',
+              marginBottom: 7,
+              fontSize: 12,
+              color: '#c9d1d9'
+            }}
+          >
+            رمز عبور
+          </label>
+          <input
+            type="password"
+            value={loginPassword}
+            onChange={e => setLoginPassword(e.target.value)}
+            autoComplete="current-password"
+            placeholder="••••••••"
+            style={{
+              width: '100%',
+              padding: '12px 13px',
+              marginBottom: 18,
+              borderRadius: 10,
+              border: '1px solid #30363d',
+              background: '#0d1117',
+              color: '#f8fafc',
+              outline: 'none',
+              fontSize: 13,
+              direction: 'ltr',
+              textAlign: 'left'
+            }}
+          />
+
+          <button
+            type="submit"
+            disabled={loginLoading}
+            style={{
+              width: '100%',
+              padding: '12px 15px',
+              borderRadius: 10,
+              border: '1px solid #f59e0b',
+              background: '#f59e0b',
+              color: '#000',
+              cursor: loginLoading ? 'not-allowed' : 'pointer',
+              fontSize: 13,
+              fontWeight: 700,
+              opacity: loginLoading ? .65 : 1
+            }}
+          >
+            {loginLoading ? 'در حال ورود...' : '🔐 ورود به پنل'}
+          </button>
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -645,6 +945,18 @@ export default function AdminPanel() {
             {refreshing
               ? '⏳ در حال بروزرسانی...'
               : '🔄 تازه‌سازی'}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleAdminLogout}
+            style={buttonStyle(
+              '#3f0d16',
+              '#fb7185',
+              '#e11d48'
+            )}
+          >
+            🚪 خروج
           </button>
         </div>
       </div>
